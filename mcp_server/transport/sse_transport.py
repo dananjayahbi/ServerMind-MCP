@@ -8,11 +8,18 @@ logger = logging.getLogger(__name__)
 async def run_sse(mcp_server, host: str = "127.0.0.1", port: int = 17433) -> None:
     """Run the MCP server using SSE transport."""
     from mcp.server.sse import SseServerTransport
+    from mcp.server.transport_security import TransportSecuritySettings
     from starlette.applications import Starlette
     from starlette.routing import Mount, Route
+    from starlette.middleware.cors import CORSMiddleware
     import uvicorn
 
-    sse = SseServerTransport("/messages/")
+    # Disable DNS rebinding protection for localhost development so VS Code
+    # Copilot and other local clients can connect without Host header issues.
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=False,
+    )
+    sse = SseServerTransport("/messages/", security_settings=security)
 
     async def handle_sse(request):
         async with sse.connect_sse(
@@ -31,7 +38,15 @@ async def run_sse(mcp_server, host: str = "127.0.0.1", port: int = 17433) -> Non
         ]
     )
 
-    logger.info("Starting MCP server in SSE mode on %s:%d", host, port)
+    # Allow VS Code and browser clients to connect cross-origin
+    starlette_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+    )
+
+    logger.info("Starting MCP SSE server on %s:%d (endpoint: /sse)", host, port)
     config = uvicorn.Config(starlette_app, host=host, port=port, log_level="warning")
     server = uvicorn.Server(config)
     await server.serve()

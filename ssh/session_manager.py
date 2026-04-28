@@ -51,6 +51,7 @@ class SessionManager:
         self._keepalive_engines: dict[str, KeepAliveEngine] = {}
         self._reconnect_policies: dict[str, ReconnectPolicy] = {}
         self._shell_channels: dict[str, ShellChannel] = {}
+        self._web_shell_channels: dict[str, ShellChannel] = {}
         self._lock = threading.RLock()
         # Map session_uuid -> paramiko client
         self._clients: dict[str, Any] = {}
@@ -187,6 +188,11 @@ class SessionManager:
             shell = self._shell_channels.pop(session_uuid, None)
             if shell:
                 shell.close()
+
+            # Close web shell channel
+            web_shell = self._web_shell_channels.pop(session_uuid, None)
+            if web_shell:
+                web_shell.close()
 
             # Close SSH client
             client = self._clients.pop(session_uuid, None)
@@ -389,6 +395,45 @@ class SessionManager:
             exit_code=None,
             duration_ms=0,
         )
+
+    # ------------------------------------------------------------------
+    # Web Shell Channel (for xterm.js WebSocket terminal)
+    # ------------------------------------------------------------------
+
+    def get_or_open_web_shell(self) -> ShellChannel | None:
+        """Get or open a dedicated PTY shell channel for the web UI terminal."""
+        active = self._registry.get_exposed()
+        if not active:
+            return None
+
+        with self._lock:
+            existing = self._web_shell_channels.get(active.session_uuid)
+            if existing and existing.is_open():
+                return existing
+
+            client = self._clients.get(active.session_uuid)
+            if not client:
+                return None
+
+            shell = ShellChannel(client)
+            # Web terminal: keep real echo and PS1 so xterm.js shows
+            # typed characters and the shell prompt.
+            shell.open(suppress_echo=False)
+            self._web_shell_channels[active.session_uuid] = shell
+
+        return shell
+
+    def close_web_shell(self, session_uuid: str | None = None) -> None:
+        """Close the web shell channel for a session (or the active one)."""
+        if session_uuid is None:
+            active = self._registry.get_active()
+            session_uuid = active.session_uuid if active else None
+        if not session_uuid:
+            return
+        with self._lock:
+            shell = self._web_shell_channels.pop(session_uuid, None)
+        if shell:
+            shell.close()
 
     # ------------------------------------------------------------------
     # State Access

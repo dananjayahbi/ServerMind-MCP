@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>ServerMind MCP</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css"/>
+<script>window.IPC_TOKEN = "__IPC_TOKEN__";</script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-primary:#f0f4f8;--bg-secondary:#ffffff;--bg-card:#ffffff;
+  --accent:#6366f1;--accent-hover:#4f46e5;--accent-dim:#6366f112;
+  --text-primary:#1e293b;--text-secondary:#475569;--text-muted:#94a3b8;
+  --success:#059669;--warning:#d97706;--error:#dc2626;--info:#2563eb;
+  --border:#e2e8f0;--border-light:#cbd5e1;--radius:10px;
+  --shadow:0 1px 3px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.04);
+  --shadow-md:0 4px 12px rgba(0,0,0,.08),0 2px 4px rgba(0,0,0,.04);
+}
+html,body{height:100%;background:var(--bg-primary);color:var(--text-primary);
+  font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  font-size:14px;overflow:hidden}
+/* ── Layout ── */
+#app{display:flex;height:100vh}
+#sidebar{width:220px;min-width:220px;background:var(--bg-secondary);
+  display:flex;flex-direction:column;border-right:1px solid var(--border);
+  transition:width .2s;overflow:hidden;box-shadow:2px 0 8px rgba(0,0,0,.04)}
+#sidebar.collapsed{width:60px}
+#sidebar-logo{padding:20px 16px 12px;display:flex;align-items:center;gap:10px;
+  border-bottom:1px solid var(--border)}
+#sidebar-logo svg{min-width:28px}
+#sidebar-logo span{font-size:16px;font-weight:700;white-space:nowrap;overflow:hidden;
+  color:var(--text-primary)}
+#sidebar nav{flex:1;padding:8px 8px;overflow-y:auto}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 10px;border-radius:8px;
+  cursor:pointer;color:var(--text-secondary);transition:all .15s;white-space:nowrap;
+  overflow:hidden;border:none;background:none;width:100%;text-align:left;font-size:13.5px}
+.nav-item:hover{background:var(--accent-dim);color:var(--text-primary)}
+.nav-item.active{background:var(--accent-dim);color:var(--accent);font-weight:600}
+.nav-item svg{min-width:18px}
+.nav-label{overflow:hidden;transition:opacity .15s}
+#sidebar.collapsed .nav-label{opacity:0;pointer-events:none}
+#sidebar-footer{padding:12px 10px;border-top:1px solid var(--border)}
+#status-pill{display:flex;align-items:center;gap:8px;padding:8px 10px;
+  border-radius:8px;background:var(--bg-card);font-size:12px;color:var(--text-muted);
+  overflow:hidden;white-space:nowrap}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--text-muted);flex-shrink:0}
+.status-dot.connected{background:var(--success)}
+.status-dot.connecting{background:var(--warning);animation:pulse 1s infinite}
+.status-dot.fault{background:var(--error)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+#toggle-btn{width:100%;margin-top:8px;background:none;border:none;cursor:pointer;
+  color:var(--text-muted);padding:6px;border-radius:6px;transition:all .15s}
+#toggle-btn:hover{background:var(--border);color:var(--text-primary)}
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#topbar{height:52px;min-height:52px;background:var(--bg-secondary);
+  border-bottom:1px solid var(--border);display:flex;align-items:center;
+  padding:0 24px;gap:16px;box-shadow:0 1px 0 var(--border)}
+#topbar h1{font-size:16px;font-weight:600;color:var(--text-primary)}
+#topbar-session{margin-left:auto;display:flex;align-items:center;gap:8px;
+  font-size:12px;color:var(--text-secondary)}
+#content{flex:1;overflow-y:auto;padding:24px}
+/* ── Cards ── */
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);
+  padding:20px;margin-bottom:16px;box-shadow:var(--shadow)}
+.card-title{font-size:13px;font-weight:600;color:var(--text-secondary);
+  text-transform:uppercase;letter-spacing:.05em;margin-bottom:16px}
+/* ── Dashboard ── */
+#session-card{display:flex;align-items:flex-start;gap:20px;flex-wrap:wrap}
+.session-state-badge{display:flex;align-items:center;gap:10px;padding:14px 20px;
+  border-radius:8px;background:var(--bg-primary);border:1px solid var(--border);min-width:160px;box-shadow:var(--shadow)}
+.session-state-badge .dot{width:12px;height:12px;border-radius:50%;background:var(--text-muted);flex-shrink:0}
+.session-state-badge .dot.connected{background:var(--success)}
+.session-state-badge .dot.connecting{background:var(--warning);animation:pulse 1s infinite}
+.session-state-badge .dot.fault{background:var(--error)}
+.session-state-badge .label{font-size:15px;font-weight:700}
+.session-meta{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--text-secondary)}
+.session-meta span strong{color:var(--text-primary)}
+.dash-actions{display:flex;flex-direction:column;gap:10px;min-width:260px}
+.dash-row{display:flex;gap:10px}
+.quick-stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;margin-top:0}
+.stat-card{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;
+  padding:14px 16px;display:flex;flex-direction:column;gap:4px;box-shadow:var(--shadow)}
+.stat-card .val{font-size:22px;font-weight:700;color:var(--text-primary)}
+.stat-card .key{font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em}
+/* ── Buttons ── */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:8px;
+  font-size:13px;font-weight:500;cursor:pointer;border:none;transition:all .15s;line-height:1}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent-hover)}
+.btn-danger{background:#fef2f2;color:var(--error);border:1px solid #fca5a5}
+.btn-danger:hover{background:#fee2e2}
+.btn-secondary{background:#f1f5f9;color:var(--text-primary);border:1px solid var(--border)}
+.btn-secondary:hover{background:#e2e8f0}
+.btn-ghost{background:transparent;color:var(--text-secondary);border:1px solid var(--border)}
+.btn-ghost:hover{background:var(--bg-primary);color:var(--text-primary)}
+.btn-sm{padding:5px 11px;font-size:12px}
+.btn-success{background:#f0fdf4;color:var(--success);border:1px solid #86efac}
+.btn-success:hover{background:#dcfce7}
+.btn:disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
+/* ── Select / Input ── */
+select,input,textarea{background:#ffffff;border:1px solid var(--border);
+  border-radius:7px;color:var(--text-primary);padding:8px 12px;font-size:13px;
+  outline:none;transition:border-color .15s;font-family:inherit}
+select:focus,input:focus,textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-dim)}
+select option{background:#ffffff}
+.form-group{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+.form-group label{font-size:12px;font-weight:500;color:var(--text-secondary)}
+.form-group input,.form-group select,.form-group textarea{width:100%}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
+/* ── Table ── */
+.tbl-wrap{overflow-x:auto;border-radius:8px;border:1px solid var(--border);box-shadow:var(--shadow)}
+table{width:100%;border-collapse:collapse}
+thead tr{background:var(--bg-primary);border-bottom:1px solid var(--border)}
+th{padding:10px 14px;text-align:left;font-size:11px;font-weight:600;
+  color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em}
+td{padding:11px 14px;font-size:13px;color:var(--text-primary);
+  border-bottom:1px solid rgba(226,232,240,.7);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:#f8faff}
+.badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;
+  font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.badge-info{background:#eff6ff;color:var(--info)}
+.badge-warn{background:#fffbeb;color:var(--warning)}
+.badge-error{background:#fef2f2;color:var(--error)}
+.badge-success{background:#f0fdf4;color:var(--success)}
+.badge-muted{background:#f1f5f9;color:#475569;border:1px solid #e2e8f0}
+/* ── Terminal ── */
+#terminal-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden}
+#term-toolbar{display:flex;align-items:center;gap:10px;padding-bottom:12px;flex-shrink:0}
+#term-toolbar h2{font-size:16px;font-weight:600;margin-right:auto}
+#term-container{flex:1;background:#000;border-radius:10px;overflow:hidden;
+  border:1px solid var(--border);position:relative;min-height:0}
+#term-offline{position:absolute;inset:0;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:12px;color:#64748b;
+  font-size:14px;background:#0f172a}
+#xterm-mount{height:100%;padding:6px}
+/* ── Modal ── */
+.modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:200;
+  display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px)}
+.modal{background:var(--bg-card);border:1px solid var(--border);border-radius:14px;
+  padding:28px;min-width:440px;max-width:560px;width:100%;position:relative;box-shadow:var(--shadow-md)}
+.modal h2{font-size:17px;font-weight:700;margin-bottom:20px}
+.modal-footer{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
+/* ── Misc ── */
+.page{display:none}
+.page.active{display:flex;flex-direction:column}
+.section-header{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+.section-header h2{font-size:18px;font-weight:700}
+.section-header p{font-size:13px;color:var(--text-secondary);margin-top:2px}
+.empty-state{text-align:center;padding:48px 24px;color:var(--text-muted)}
+.empty-state svg{opacity:.3;margin-bottom:12px}
+.toast{position:fixed;bottom:24px;right:24px;z-index:999;padding:12px 18px;
+  border-radius:10px;font-size:13px;font-weight:500;animation:slideup .2s ease;
+  max-width:340px;box-shadow:0 8px 24px #00000060}
+.toast-success{background:#10b981;color:#fff}
+.toast-error{background:#ef4444;color:#fff}
+.toast-info{background:#6366f1;color:#fff}
+@keyframes slideup{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+.log-row td:nth-child(4){max-width:480px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#content-terminal{padding:16px 24px 24px;flex:1;display:flex;flex-direction:column;overflow:hidden}
+.confirm-text{font-size:14px;color:var(--text-secondary);line-height:1.6;margin-bottom:6px}
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Sidebar -->
+  <div id="sidebar">
+    <div id="sidebar-logo">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+        <rect width="28" height="28" rx="7" fill="#6366f1"/>
+        <path d="M7 10h14M7 14h10M7 18h6" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <span>ServerMind</span>
+    </div>
+    <nav>
+      <button class="nav-item active" data-page="dashboard">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        <span class="nav-label">Dashboard</span>
+      </button>
+      <button class="nav-item" data-page="terminal">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        <span class="nav-label">Terminal</span>
+      </button>
+      <button class="nav-item" data-page="servers">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="5" rx="2"/><rect x="2" y="10" width="20" height="5" rx="2"/><rect x="2" y="17" width="20" height="4" rx="2"/></svg>
+        <span class="nav-label">Servers</span>
+      </button>
+      <button class="nav-item" data-page="logs">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        <span class="nav-label">Audit Log</span>
+      </button>
+      <button class="nav-item" data-page="settings">
+        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        <span class="nav-label">Settings</span>
+      </button>
+    </nav>
+    <div id="sidebar-footer">
+      <div id="status-pill">
+        <div class="status-dot" id="sb-dot"></div>
+        <span id="sb-state">Offline</span>
+      </div>
+      <button id="toggle-btn" title="Collapse sidebar">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>
+      </button>
+    </div>
+  </div>
+  <!-- Main -->
+  <div id="main">
+    <div id="topbar">
+      <h1 id="topbar-title">Dashboard</h1>
+      <div id="topbar-session">
+        <span id="tb-session-text" style="background:var(--bg-primary);padding:5px 12px;border-radius:20px;border:1px solid var(--border);font-size:12px">No session</span>
+      </div>
+    </div>
+    <!-- Pages -->
+    <div id="content">
+      <!-- Dashboard -->
+      <div id="page-dashboard" class="page active">
+        <div class="card" style="background:linear-gradient(135deg,#6366f1 0%,#4f46e5 100%);border:none;color:#fff;margin-bottom:20px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-size:11px;font-weight:600;opacity:.75;text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px">ServerMind MCP</div>
+              <div style="font-size:22px;font-weight:700;margin-bottom:6px">Control Panel</div>
+              <div style="font-size:13px;opacity:.8">AI-assisted SSH server management</div>
+            </div>
+            <svg width="56" height="56" fill="none" viewBox="0 0 56 56" style="opacity:.35">
+              <rect width="56" height="56" rx="14" fill="#fff"/>
+              <path d="M14 20h28M14 28h20M14 36h12" stroke="#6366f1" stroke-width="3" stroke-linecap="round"/>
+            </svg>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">Session Status</div>
+          <div id="session-card">
+            <div class="session-state-badge">
+              <div class="dot" id="dash-dot"></div>
+              <span class="label" id="dash-state">DISCONNECTED</span>
+            </div>
+            <div class="session-meta" id="dash-meta" style="display:none">
+              <span><strong id="dash-uuid">—</strong> UUID</span>
+              <span>Up: <strong id="dash-uptime">—</strong></span>
+              <span>Commands: <strong id="dash-cmds">0</strong></span>
+            </div>
+          </div>
+          <div class="dash-actions" style="margin-top:16px">
+            <div class="dash-row">
+              <select id="profile-select" style="flex:1">
+                <option value="">— Select a server —</option>
+              </select>
+              <button class="btn btn-primary" id="btn-connect">Connect</button>
+            </div>
+            <button class="btn btn-danger" id="btn-disconnect" style="display:none">Disconnect</button>
+          </div>
+        </div>
+        <div class="quick-stats">
+          <div class="stat-card">
+            <div class="val" id="stat-profiles">0</div>
+            <div class="key">Servers</div>
+          </div>
+          <div class="stat-card">
+            <div class="val" id="stat-logs">0</div>
+            <div class="key">Log Entries</div>
+          </div>
+          <div class="stat-card">
+            <div class="val" id="stat-cmds">0</div>
+            <div class="key">Commands Run</div>
+          </div>
+          <div class="stat-card">
+            <div class="val" id="stat-uptime">—</div>
+            <div class="key">Backend Uptime</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Terminal (outside #content for full height) -->
+    <div id="content-terminal" class="page">
+      <div id="terminal-wrap">
+        <div id="term-toolbar">
+          <h2>Terminal</h2>
+          <button class="btn btn-ghost btn-sm" id="btn-clear-term">Clear</button>
+          <button class="btn btn-ghost btn-sm" id="btn-reconnect-term">Reconnect</button>
+          <span id="term-status" style="font-size:12px;color:var(--text-muted);margin-left:4px"></span>
+        </div>
+        <div id="term-container">
+          <div id="term-offline">
+            <svg width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+            <span>No active session</span>
+            <span style="font-size:12px">Go to Dashboard to connect a server first</span>
+          </div>
+          <div id="xterm-mount" style="display:none;height:100%"></div>
+        </div>
+      </div>
+    </div>
+    <!-- Servers (inside #content) -->
+    <div id="page-servers" class="page" style="display:none;flex-direction:column">
+    </div>
+    <!-- Logs (inside #content) -->
+    <div id="page-logs" class="page" style="display:none;flex-direction:column">
+    </div>
+    <!-- Settings -->
+    <div id="page-settings" class="page" style="display:none;flex-direction:column">
+    </div>
+  </div>
+</div>
+
+<!-- Server Modal -->
+<div id="server-modal" class="modal-backdrop" style="display:none">
+  <div class="modal">
+    <h2 id="modal-title">Add Server</h2>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Display Name *</label>
+        <input id="f-name" placeholder="My Server"/>
+      </div>
+      <div class="form-group">
+        <label>Hostname / IP *</label>
+        <input id="f-host" placeholder="192.168.1.1"/>
+      </div>
+      <div class="form-group">
+        <label>Port</label>
+        <input id="f-port" type="number" value="22" placeholder="22"/>
+      </div>
+      <div class="form-group">
+        <label>Username *</label>
+        <input id="f-user" placeholder="ubuntu"/>
+      </div>
+      <div class="form-group" style="grid-column:span 2">
+        <label>Auth Method</label>
+        <select id="f-auth">
+          <option value="password">Password</option>
+          <option value="ppk">PPK / Private Key File</option>
+        </select>
+      </div>
+      <div class="form-group" id="f-pw-group" style="grid-column:span 2">
+        <label>Password</label>
+        <input id="f-pw" type="password" placeholder="(optional — stored locally)"/>
+      </div>
+      <div class="form-group" id="f-ppk-group" style="display:none;grid-column:span 2">
+        <label>PPK / Private Key File</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input id="f-ppk" placeholder="C:\Users\you\key.ppk" style="flex:1"/>
+          <button type="button" class="btn btn-ghost btn-sm" id="btn-browse-ppk">Browse</button>
+        </div>
+        <input type="file" id="f-ppk-file" accept=".ppk,.pem,.key,.rsa" style="display:none"/>
+        <span id="f-ppk-upload-status" style="font-size:11px;color:var(--text-muted)"></span>
+      </div>
+      <div class="form-group" style="grid-column:span 2">
+        <label>Notes</label>
+        <textarea id="f-notes" rows="2" placeholder="Optional notes"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+      <button class="btn btn-primary" id="modal-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Confirm Modal -->
+<div id="confirm-modal" class="modal-backdrop" style="display:none">
+  <div class="modal" style="min-width:340px;max-width:420px">
+    <h2 id="confirm-title">Confirm</h2>
+    <p class="confirm-text" id="confirm-msg"></p>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" id="confirm-no">Cancel</button>
+      <button class="btn btn-danger" id="confirm-yes">Delete</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<script>
+'use strict';
+const TOKEN = window.IPC_TOKEN;
+const BASE = 'http://127.0.0.1:17432';
+const WS_BASE = 'ws://127.0.0.1:17432';
+
+// ── API helpers ──────────────────────────────────────────────────────────────
+async function api(method, path, body) {
+  try {
+    const res = await fetch(BASE + path, {
+      method,
+      headers: { 'X-IPC-Token': TOKEN, 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } catch (e) {
+    return null;
+  }
+}
+const GET = (p) => api('GET', p);
+const POST = (p, b) => api('POST', p, b);
+const PUT = (p, b) => api('PUT', p, b);
+const DEL = (p) => api('DELETE', p);
+
+// ── State ────────────────────────────────────────────────────────────────────
+let state = {
+  sessionState: 'DISCONNECTED', sessionUUID: null, profileId: null,
+  connectedProfileId: null,
+  uptime: 0, commands: 0, profiles: [], logs: [],
+  backendUptime: 0,
+};
+
+// ── Toast ────────────────────────────────────────────────────────────────────
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = `toast toast-${type}`;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+let currentPage = 'dashboard';
+const PAGE_TITLES = { dashboard: 'Dashboard', terminal: 'Terminal', servers: 'Servers', logs: 'Audit Log', settings: 'Settings' };
+
+function navigateTo(page) {
+  currentPage = page;
+  document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.page === page));
+  document.getElementById('topbar-title').textContent = PAGE_TITLES[page] || page;
+
+  // Hide all page containers
+  document.getElementById('content').style.display = 'none';
+  document.getElementById('content-terminal').style.display = 'none';
+  ['dashboard', 'servers', 'logs', 'settings'].forEach(p => {
+    const el = document.getElementById('page-' + p);
+    if (el) { el.style.display = 'none'; el.classList.remove('active'); }
+  });
+
+  if (page === 'terminal') {
+    const ct = document.getElementById('content-terminal');
+    ct.style.display = 'flex';
+    ct.classList.add('active');
+    onTerminalPageVisible();
+  } else {
+    document.getElementById('content').style.display = 'block';
+    const el = document.getElementById('page-' + page);
+    if (el) { el.style.display = 'flex'; el.classList.add('active'); }
+    if (page === 'servers') renderServersPage();
+    if (page === 'logs') renderLogsPage();
+    if (page === 'settings') renderSettingsPage();
+  }
+}
+
+document.querySelectorAll('.nav-item').forEach(btn => {
+  btn.addEventListener('click', () => navigateTo(btn.dataset.page));
+});
+
+// Sidebar collapse
+let sidebarCollapsed = false;
+document.getElementById('toggle-btn').addEventListener('click', () => {
+  sidebarCollapsed = !sidebarCollapsed;
+  document.getElementById('sidebar').classList.toggle('collapsed', sidebarCollapsed);
+  document.getElementById('toggle-btn').innerHTML = sidebarCollapsed
+    ? '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>'
+    : '<svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg>';
+});
+
+// ── Session state update ─────────────────────────────────────────────────────
+function updateSessionUI(s) {
+  const st = (s.state || 'DISCONNECTED').toUpperCase();
+  state.sessionState = st;
+  state.sessionUUID = s.session_uuid || null;
+  state.connectedProfileId = s.profile_id || null;
+  state.commands = s.commands_executed || 0;
+  state.uptime = s.uptime_sec || 0;
+
+  const dotClass = st === 'CONNECTED' ? 'connected' : st === 'CONNECTING' || st === 'RECONNECTING' ? 'connecting' : st === 'FAULT' ? 'fault' : '';
+  ['dash-dot','sb-dot'].forEach(id => {
+    const d = document.getElementById(id);
+    d.className = 'dot status-dot'.split(' ').filter(Boolean).join(' ');
+    d.classList.add('dot'); if (dotClass) d.classList.add(dotClass);
+  });
+  document.getElementById('dash-dot').className = 'dot' + (dotClass ? ' ' + dotClass : '');
+  document.getElementById('sb-dot').className = 'status-dot' + (dotClass ? ' ' + dotClass : '');
+  document.getElementById('dash-state').textContent = st;
+  document.getElementById('sb-state').textContent = st;
+  document.getElementById('tb-session-text').textContent = st === 'CONNECTED' && state.sessionUUID
+    ? 'Session: ' + state.sessionUUID.slice(0, 8) + '…' : 'No session';
+
+  const meta = document.getElementById('dash-meta');
+  meta.style.display = st === 'CONNECTED' ? 'flex' : 'none';
+  document.getElementById('dash-uuid').textContent = (state.sessionUUID || '').slice(0, 16) + '…';
+  document.getElementById('dash-uptime').textContent = formatDur(state.uptime);
+  document.getElementById('dash-cmds').textContent = state.commands;
+  document.getElementById('stat-cmds').textContent = state.commands;
+  document.getElementById('btn-disconnect').style.display = st === 'CONNECTED' ? 'block' : 'none';
+  document.getElementById('btn-connect').style.display = st === 'CONNECTED' ? 'none' : 'inline-flex';
+  document.getElementById('profile-select').style.display = st === 'CONNECTED' ? 'none' : 'block';
+
+  updateTerminalOfflineState();
+  // Refresh server table rows when state changes (updates Connect/Disconnect buttons)
+  if (currentPage === 'servers') renderServerRows();
+}
+
+function formatDur(sec) {
+  if (!sec) return '0s';
+  sec = Math.floor(sec);
+  if (sec < 60) return sec + 's';
+  if (sec < 3600) return Math.floor(sec/60) + 'm ' + (sec%60) + 's';
+  return Math.floor(sec/3600) + 'h ' + Math.floor((sec%3600)/60) + 'm';
+}
+
+// ── Profiles ─────────────────────────────────────────────────────────────────
+function updateProfilesUI() {
+  document.getElementById('stat-profiles').textContent = state.profiles.length;
+  const sel = document.getElementById('profile-select');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">— Select a server —</option>';
+  state.profiles.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = `${p.display_name} (${p.hostname}:${p.port || 22})`;
+    sel.appendChild(o);
+  });
+  if (prev) sel.value = prev;
+}
+
+// ── Connect / Disconnect ─────────────────────────────────────────────────────
+document.getElementById('btn-connect').addEventListener('click', async () => {
+  const id = document.getElementById('profile-select').value;
+  if (!id) { toast('Select a server first', 'error'); return; }
+  document.getElementById('btn-connect').disabled = true;
+  const r = await POST('/api/v1/session/expose', { profile_id: id });
+  document.getElementById('btn-connect').disabled = false;
+  if (r) { toast('Connecting…', 'info'); } else toast('Failed to connect', 'error');
+});
+document.getElementById('btn-disconnect').addEventListener('click', async () => {
+  await POST('/api/v1/session/disconnect');
+  toast('Disconnected', 'info');
+  termWsClose();
+});
+
+// ── Poll ─────────────────────────────────────────────────────────────────────
+async function pollStatus() {
+  const [sess, profiles, health] = await Promise.all([
+    GET('/api/v1/session/status'),
+    GET('/api/v1/profiles'),
+    GET('/api/v1/health'),
+  ]);
+  if (sess) updateSessionUI(sess);
+  if (profiles && Array.isArray(profiles)) { state.profiles = profiles; updateProfilesUI(); }
+  if (health) {
+    state.backendUptime = health.uptime_sec || 0;
+    document.getElementById('stat-uptime').textContent = formatDur(state.backendUptime);
+  }
+}
+
+setInterval(pollStatus, 3000);
+pollStatus();
+
+// ── Events WebSocket ─────────────────────────────────────────────────────────
+let evWs = null;
+function connectEvWs() {
+  if (evWs) return;
+  try {
+    evWs = new WebSocket(`${WS_BASE}/ws/events?token=${TOKEN}`);
+    evWs.onmessage = (e) => {
+      try {
+        const ev = JSON.parse(e.data);
+        if (ev.type === 'session.state_changed') updateSessionUI(ev.payload);
+        else if (ev.type === 'log.entry') appendLogEntry(ev.payload);
+        else if (ev.type === 'terminal.output_chunk') {
+          // MCP agent command output piped to web terminal in real-time
+          if (term && ev.payload && ev.payload.stream === 'exec') {
+            const chunk = ev.payload.chunk || '';
+            if (chunk) term.write(chunk.replace(/\n/g, '\r\n'));
+          }
+        }
+      } catch {}
+    };
+    evWs.onclose = () => { evWs = null; setTimeout(connectEvWs, 4000); };
+    evWs.onerror = () => { evWs = null; };
+  } catch { setTimeout(connectEvWs, 4000); }
+}
+connectEvWs();
+
+// ── Terminal ─────────────────────────────────────────────────────────────────
+let term = null, fitAddon = null, termWs = null;
+
+function initXterm() {
+  if (term) return;
+  const mount = document.getElementById('xterm-mount');
+  term = new Terminal({
+    theme: { background: '#000000', foreground: '#e2e8f0', cursor: '#6366f1',
+             selectionBackground: '#6366f140' },
+    fontFamily: "'Cascadia Code','Fira Mono','Consolas',monospace",
+    fontSize: 13, lineHeight: 1.4, cursorBlink: true, scrollback: 100000,
+    allowTransparency: false,
+  });
+  fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(mount);
+  fitAddon.fit();
+  term.onData(data => {
+    if (termWs && termWs.readyState === WebSocket.OPEN) termWs.send(data);
+  });
+  window.addEventListener('resize', () => { if (fitAddon) fitAddon.fit(); });
+}
+
+function termWsClose() {
+  if (termReconnectTimer) { clearTimeout(termReconnectTimer); termReconnectTimer = null; }
+  if (termWs) {
+    termWs.onclose = null; // suppress auto-reconnect on intentional close
+    termWs.close();
+    termWs = null;
+  }
+}
+
+let termReconnectTimer = null;
+let _termConnecting = false;
+function connectTermWs() {
+  if (state.sessionState !== 'CONNECTED') return;
+  if (termWs && (termWs.readyState === WebSocket.OPEN || termWs.readyState === WebSocket.CONNECTING)) return;
+  if (_termConnecting) return;
+  _termConnecting = true;
+  termWs = null;
+  setTermStatus('Connecting…');
+  try {
+    const ws = new WebSocket(`${WS_BASE}/ws/terminal/web?token=${TOKEN}`);
+    termWs = ws;
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = () => {
+      _termConnecting = false;
+      setTermStatus('Ready');
+      if (term) fitAddon.fit();
+    };
+    ws.onmessage = (e) => {
+      if (!term) return;
+      if (typeof e.data === 'string') {
+        term.write(e.data);
+      } else {
+        term.write(new Uint8Array(e.data));
+      }
+    };
+    ws.onclose = (ev) => {
+      _termConnecting = false;
+      if (termWs !== ws) return; // stale reference
+      termWs = null;
+      setTermStatus(ev.wasClean ? 'Closed' : 'Lost connection — retrying…');
+      if (state.sessionState === 'CONNECTED' && currentPage === 'terminal') {
+        termReconnectTimer = setTimeout(connectTermWs, 2500);
+      }
+    };
+    ws.onerror = () => {
+      _termConnecting = false;
+      if (termWs !== ws) return;
+      termWs = null;
+      setTermStatus('Error');
+    };
+  } catch {
+    _termConnecting = false;
+    setTermStatus('Error');
+  }
+}
+
+function setTermStatus(msg) {
+  const el = document.getElementById('term-status');
+  if (el) el.textContent = msg;
+}
+
+function onTerminalPageVisible() {
+  initXterm();
+  updateTerminalOfflineState();
+  if (state.sessionState === 'CONNECTED') connectTermWs();
+  setTimeout(() => { if (fitAddon) fitAddon.fit(); }, 60);
+}
+
+function updateTerminalOfflineState() {
+  const offline = document.getElementById('term-offline');
+  const mount = document.getElementById('xterm-mount');
+  const connected = state.sessionState === 'CONNECTED';
+  offline.style.display = connected ? 'none' : 'flex';
+  mount.style.display = connected ? 'block' : 'none';
+  if (connected && currentPage === 'terminal') {
+    connectTermWs();
+  } else if (!connected) {
+    termWsClose();
+    setTermStatus('');
+  }
+}
+
+document.getElementById('btn-clear-term').addEventListener('click', () => { if (term) term.clear(); });
+document.getElementById('btn-reconnect-term').addEventListener('click', () => {
+  termWsClose(); connectTermWs();
+});
+
+// ── Servers page ─────────────────────────────────────────────────────────────
+function renderServersPage() {
+  const el = document.getElementById('page-servers');
+  el.innerHTML = `
+    <div class="section-header">
+      <div><h2>Servers</h2><p>Manage SSH server profiles</p></div>
+      <button class="btn btn-primary" style="margin-left:auto" id="btn-add-server">+ Add Server</button>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Host</th><th>Port</th><th>User</th><th>Auth</th><th>Actions</th></tr></thead>
+        <tbody id="servers-tbody"></tbody>
+      </table>
+    </div>
+  `;
+  document.getElementById('btn-add-server').addEventListener('click', () => openServerModal());
+  renderServerRows();
+}
+
+function renderServerRows() {
+  const tbody = document.getElementById('servers-tbody');
+  if (!tbody) return;
+  if (!state.profiles.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:32px">No servers configured. Click + Add Server.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = state.profiles.map(p => {
+    const isActive = state.sessionState === 'CONNECTED' && state.connectedProfileId === p.id;
+    const actionBtn = isActive
+      ? `<button class="btn btn-danger btn-sm" onclick="disconnectServer()">Disconnect</button>`
+      : `<button class="btn btn-success btn-sm" onclick="connectProfile('${p.id}')">Connect</button>`;
+    return `<tr>
+      <td><strong>${esc(p.display_name)}</strong>${isActive ? ' <span class="badge badge-success" style="margin-left:4px">Active</span>' : ''}</td>
+      <td>${esc(p.hostname)}</td>
+      <td>${p.port || 22}</td>
+      <td>${esc(p.username)}</td>
+      <td><span class="badge badge-muted">${esc(p.auth_method || 'password')}</span></td>
+      <td>
+        <div style="display:flex;gap:6px">
+          ${actionBtn}
+          <button class="btn btn-ghost btn-sm" onclick="editProfile('${p.id}')">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteProfile('${p.id}','${esc(p.display_name)}')">Delete</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+window.connectProfile = async function(id) {
+  const r = await POST('/api/v1/session/expose', { profile_id: id });
+  if (r) { toast('Connecting…', 'info'); navigateTo('dashboard'); }
+  else toast('Failed to connect', 'error');
+};
+window.disconnectServer = async function() {
+  await POST('/api/v1/session/disconnect');
+  toast('Disconnected', 'info');
+  termWsClose();
+  if (currentPage === 'servers') renderServerRows();
+};
+window.editProfile = function(id) {
+  const p = state.profiles.find(x => x.id === id);
+  if (p) openServerModal(p);
+};
+window.deleteProfile = function(id, name) {
+  showConfirm(`Delete "${name}"?`, 'This cannot be undone.', async () => {
+    await DEL(`/api/v1/profiles/${id}`);
+    state.profiles = state.profiles.filter(x => x.id !== id);
+    updateProfilesUI(); renderServerRows(); toast('Deleted', 'info');
+  });
+};
+
+let editingProfileId = null;
+function openServerModal(profile = null) {
+  editingProfileId = profile ? profile.id : null;
+  document.getElementById('modal-title').textContent = profile ? 'Edit Server' : 'Add Server';
+  document.getElementById('f-name').value = profile ? profile.display_name : '';
+  document.getElementById('f-host').value = profile ? profile.hostname : '';
+  document.getElementById('f-port').value = profile ? (profile.port || 22) : 22;
+  document.getElementById('f-user').value = profile ? profile.username : '';
+  document.getElementById('f-auth').value = profile ? (profile.auth_method || 'password') : 'password';
+  document.getElementById('f-pw').value = '';
+  document.getElementById('f-ppk').value = profile ? (profile.ppk_file_path || '') : '';
+  document.getElementById('f-notes').value = profile ? (profile.notes || '') : '';
+  toggleAuthFields();
+  document.getElementById('server-modal').style.display = 'flex';
+}
+function closeServerModal() { document.getElementById('server-modal').style.display = 'none'; }
+document.getElementById('modal-cancel').addEventListener('click', closeServerModal);
+document.getElementById('f-auth').addEventListener('change', toggleAuthFields);
+function toggleAuthFields() {
+  const auth = document.getElementById('f-auth').value;
+  document.getElementById('f-pw-group').style.display = auth === 'password' ? 'flex' : 'none';
+  document.getElementById('f-ppk-group').style.display = auth === 'ppk' ? 'flex' : 'none';
+}
+document.getElementById('modal-save').addEventListener('click', async () => {
+  const name = document.getElementById('f-name').value.trim();
+  const host = document.getElementById('f-host').value.trim();
+  const user = document.getElementById('f-user').value.trim();
+  if (!name || !host || !user) { toast('Name, Hostname, and Username are required', 'error'); return; }
+  const auth = document.getElementById('f-auth').value;
+  const body = {
+    display_name: name, hostname: host,
+    port: parseInt(document.getElementById('f-port').value) || 22,
+    username: user, auth_method: auth,
+    password: auth === 'password' ? document.getElementById('f-pw').value : undefined,
+    ppk_file_path: auth === 'ppk' ? document.getElementById('f-ppk').value.trim() : undefined,
+    notes: document.getElementById('f-notes').value.trim() || undefined,
+  };
+  let r;
+  if (editingProfileId) r = await PUT(`/api/v1/profiles/${editingProfileId}`, body);
+  else r = await POST('/api/v1/profiles', body);
+  if (r) {
+    toast(editingProfileId ? 'Saved' : 'Server added', 'success');
+    closeServerModal();
+    const fresh = await GET('/api/v1/profiles');
+    if (fresh) { state.profiles = fresh; updateProfilesUI(); renderServerRows(); }
+  } else toast('Failed to save', 'error');
+});
+
+// ── Logs page ─────────────────────────────────────────────────────────────────
+const LEVEL_BADGE = { INFO: 'info', WARNING: 'warn', ERROR: 'error', DEBUG: 'muted', CRITICAL: 'error' };
+function renderLogsPage() {
+  const el = document.getElementById('page-logs');
+  el.innerHTML = `
+    <div class="section-header">
+      <div><h2>Audit Log</h2><p>Recent system events</p></div>
+      <div style="margin-left:auto;display:flex;gap:10px;align-items:center">
+        <select id="log-filter"><option value="">All levels</option>
+          <option>INFO</option><option>WARNING</option><option>ERROR</option><option>DEBUG</option>
+        </select>
+        <button class="btn btn-ghost btn-sm" id="btn-clear-logs">Clear</button>
+        <button class="btn btn-ghost btn-sm" id="btn-refresh-logs">Refresh</button>
+      </div>
+    </div>
+    <div class="tbl-wrap" style="flex:1;overflow-y:auto">
+      <table>
+        <thead><tr><th>Time</th><th>Level</th><th>Category</th><th>Message</th></tr></thead>
+        <tbody id="logs-tbody"></tbody>
+      </table>
+    </div>
+  `;
+  document.getElementById('log-filter').addEventListener('change', renderLogRows);
+  document.getElementById('btn-clear-logs').addEventListener('click', () => { state.logs = []; renderLogRows(); });
+  document.getElementById('btn-refresh-logs').addEventListener('click', fetchLogs);
+  fetchLogs();
+}
+
+async function fetchLogs() {
+  const r = await GET('/api/v1/logs?limit=200');
+  if (r && Array.isArray(r)) {
+    state.logs = r.reverse();
+    document.getElementById('stat-logs').textContent = state.logs.length;
+    renderLogRows();
+  }
+}
+
+function appendLogEntry(entry) {
+  state.logs.unshift(entry);
+  if (state.logs.length > 500) state.logs.length = 500;
+  document.getElementById('stat-logs').textContent = state.logs.length;
+  if (currentPage === 'logs') renderLogRows();
+}
+
+function renderLogRows() {
+  const tbody = document.getElementById('logs-tbody');
+  if (!tbody) return;
+  const filter = (document.getElementById('log-filter') || {}).value || '';
+  const rows = state.logs.filter(l => !filter || (l.level || '').toUpperCase() === filter);
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:32px">No log entries.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(l => {
+    const lvl = (l.level || 'INFO').toUpperCase();
+    const b = LEVEL_BADGE[lvl] || 'muted';
+    const ts = l.timestamp ? new Date(l.timestamp).toLocaleTimeString() : '—';
+    return `<tr class="log-row">
+      <td style="white-space:nowrap;font-family:monospace;font-size:12px">${esc(ts)}</td>
+      <td><span class="badge badge-${b}">${esc(lvl)}</span></td>
+      <td style="color:var(--text-secondary)">${esc(l.category || '')}</td>
+      <td title="${esc(l.message || '')}">${esc(l.message || '')}</td>
+    </tr>`;
+  }).join('');
+}
+
+setInterval(() => { if (currentPage === 'logs') fetchLogs(); }, 5000);
+
+// ── Settings page ─────────────────────────────────────────────────────────────
+function renderSettingsPage() {
+  document.getElementById('page-settings').innerHTML = `
+    <div class="section-header"><div><h2>Settings</h2><p>Configuration options</p></div></div>
+    <div class="card">
+      <div class="card-title">Web UI</div>
+      <p style="color:var(--text-secondary);font-size:13px">More settings coming soon.</p>
+      <div style="margin-top:16px;font-size:12px;color:var(--text-muted)">
+        <div>IPC Port: <strong>17432</strong></div>
+        <div>Token: <strong>${TOKEN.slice(0,8)}…</strong></div>
+      </div>
+    </div>
+  `;
+}
+
+// ── Confirm dialog ────────────────────────────────────────────────────────────
+let confirmCb = null;
+function showConfirm(title, msg, cb) {
+  confirmCb = cb;
+  document.getElementById('confirm-title').textContent = title;
+  document.getElementById('confirm-msg').textContent = msg;
+  document.getElementById('confirm-modal').style.display = 'flex';
+}
+document.getElementById('confirm-no').addEventListener('click', () => {
+  document.getElementById('confirm-modal').style.display = 'none'; confirmCb = null;
+});
+document.getElementById('confirm-yes').addEventListener('click', () => {
+  document.getElementById('confirm-modal').style.display = 'none';
+  if (confirmCb) { confirmCb(); confirmCb = null; }
+});
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── PPK file upload ───────────────────────────────────────────────────────────
+async function uploadKeyFile(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch(BASE + '/api/v1/profiles/upload-key', {
+      method: 'POST',
+      headers: { 'X-IPC-Token': TOKEN },
+      body: fd,
+    });
+    if (!res.ok) throw new Error('Upload failed');
+    return (await res.json()).path;
+  } catch (e) {
+    toast('Key file upload failed', 'error');
+    return null;
+  }
+}
+
+document.getElementById('btn-browse-ppk').addEventListener('click', () => {
+  document.getElementById('f-ppk-file').click();
+});
+document.getElementById('f-ppk-file').addEventListener('change', async (ev) => {
+  const file = ev.target.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById('f-ppk-upload-status');
+  statusEl.textContent = 'Uploading…';
+  const path = await uploadKeyFile(file);
+  if (path) {
+    document.getElementById('f-ppk').value = path;
+    statusEl.textContent = 'Uploaded: ' + file.name;
+    statusEl.style.color = 'var(--success)';
+  } else {
+    statusEl.textContent = 'Upload failed — enter path manually';
+    statusEl.style.color = 'var(--error)';
+  }
+  ev.target.value = '';
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+navigateTo('dashboard');
+</script>
+</body>
+</html>

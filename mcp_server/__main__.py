@@ -121,6 +121,20 @@ def main() -> None:
     # 9. Wire command results -> IPC event bus
     def _on_command_result(result) -> None:
         publish_sync(WSEventType.COMMAND_COMPLETED, result.to_dict())
+        # Also echo the command I/O to the web terminal so users can watch
+        # what the AI agent is executing in real-time.
+        chunk = ""
+        if result.stdout:
+            chunk += result.stdout
+        if result.stderr:
+            chunk += result.stderr
+        if chunk:
+            publish_sync(WSEventType.TERMINAL_OUTPUT_CHUNK, {
+                "session_uuid": "",
+                "command_id": result.command_id,
+                "chunk": chunk,
+                "stream": "exec",
+            })
 
     queue_manager.set_result_callback(_on_command_result)
 

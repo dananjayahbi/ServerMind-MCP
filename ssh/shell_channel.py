@@ -35,16 +35,37 @@ class ShellChannel:
             output_callback: Called with (command_id, chunk_text, stream_name) for each output chunk.
         """
         self._client = client
-        self._output_callback = output_callback
+        self._output_callbacks: list[Callable[[str, str, str], None]] = []
+        if output_callback:
+            self._output_callbacks.append(output_callback)
         self._channel: paramiko.Channel | None = None
         self._lock = threading.Lock()
+        self._cb_lock = threading.Lock()
         self._reader_thread: threading.Thread | None = None
         self._reader_running: bool = False
         self._output_buf = ""
         self._buf_lock = threading.Lock()
 
-    def open(self) -> None:
-        """Open the persistent shell channel."""
+    def add_output_callback(self, cb: Callable[[str, str, str], None]) -> None:
+        """Register an additional output callback."""
+        with self._cb_lock:
+            if cb not in self._output_callbacks:
+                self._output_callbacks.append(cb)
+
+    def remove_output_callback(self, cb: Callable[[str, str, str], None]) -> None:
+        """Unregister an output callback."""
+        with self._cb_lock:
+            self._output_callbacks = [c for c in self._output_callbacks if c is not cb]
+
+    def open(self, suppress_echo: bool = True) -> None:
+        """Open the persistent shell channel.
+
+        Args:
+            suppress_echo: When True (default, used by the GUI terminal), runs
+                ``stty -echo`` and clears PS1 so the Tkinter panel can render
+                output without duplication.  Set to False for the xterm.js web
+                terminal which needs real PTY echo and the normal shell prompt.
+        """
         with self._lock:
             if self._channel and not self._channel.closed:
                 return  # Already open
@@ -53,23 +74,26 @@ class ShellChannel:
                 raise RuntimeError("SSH transport is not active")
             self._channel = self._client.invoke_shell(term="xterm-256color", width=220, height=50)
             self._channel.setblocking(False)
-            # Consume initial banner / prompt
-            time.sleep(0.4)
-            self._drain_initial()
-            # Suppress PTY echo and PS1/PS2/PROMPT_COMMAND so output is clean.
-            # stty -echo: stops the terminal from echoing what we type.
-            # PS1/PS2/PROMPT_COMMAND='': removes all prompt prefixes.
-            # HISTCONTROL: keeps these setup commands out of bash history.
-            setup = (
-                b"stty -echo 2>/dev/null; "
-                b"export PS1='' PS2='' PS3='' PS4='' PROMPT_COMMAND='' "
-                b"HISTCONTROL=ignoreboth\n"
-            )
-            self._channel.sendall(setup)
-            # Wait for setup to execute, then drain all resulting noise
-            time.sleep(0.5)
-            self._drain_initial()
-        logger.debug("Shell channel opened (echo + prompts suppressed)")
+            if suppress_echo:
+                # GUI mode: wait for channel, drain banner, then suppress echo+PS1
+                time.sleep(0.4)
+                self._drain_initial()
+                setup = (
+                    b"stty -echo 2>/dev/null; "
+                    b"export PS1='' PS2='' PS3='' PS4='' PROMPT_COMMAND='' "
+                    b"HISTCONTROL=ignoreboth\n"
+                )
+                self._channel.sendall(setup)
+                # Wait for setup to execute, then drain all resulting noise
+                time.sleep(0.5)
+                self._drain_initial()
+                logger.debug("Shell channel opened (echo + prompts suppressed)")
+            else:
+                # Web / xterm.js mode: brief wait only; DO NOT drain initial output
+                # so the reader delivers the MOTD banner + prompt to xterm.js.
+                time.sleep(0.1)
+                logger.debug("Shell channel opened (web mode - prompt flows to xterm.js)")
+        # Start reader BEFORE releasing lock return so initial output is captured
         self._start_reader()
 
     def close(self) -> None:
@@ -95,6 +119,13 @@ class ShellChannel:
         with self._lock:
             self._channel.sendall((text + "\n").encode())
 
+    def send_input(self, data: bytes) -> None:
+        """Send raw bytes to the shell (used by xterm.js WebSocket bridge — no added newline)."""
+        if not self.is_open():
+            raise RuntimeError("Shell channel is not open")
+        with self._lock:
+            self._channel.sendall(data)
+
     def _start_reader(self) -> None:
         """Start the background reader thread that streams output chunks via callback."""
         if self._reader_running:
@@ -119,9 +150,11 @@ class ShellChannel:
                     data = ch.recv(SHELL_OUTPUT_BUFFER_SIZE)
                     if data:
                         chunk = data.decode("utf-8", errors="replace")
-                        if self._output_callback:
+                        with self._cb_lock:
+                            cbs = list(self._output_callbacks)
+                        for cb in cbs:
                             try:
-                                self._output_callback("shell", chunk, "stdout")
+                                cb("shell", chunk, "stdout")
                             except Exception:
                                 logger.exception("Error in shell output callback")
                 else:

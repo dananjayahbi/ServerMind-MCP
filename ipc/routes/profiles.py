@@ -1,6 +1,10 @@
-"""Profile management endpoints (list, create, update, delete)."""
+"""Profile management endpoints (list, create, update, delete, key upload)."""
 
-from fastapi import APIRouter, HTTPException
+import uuid
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi.responses import JSONResponse
 
 from config.engine import get_engine
 from ipc.models import CreateProfileRequest, ProfileResponse, UpdateProfileRequest
@@ -8,6 +12,21 @@ from shared.exceptions import ProfileInUseError, ProfileNotFoundError
 from shared.models import ServerProfile
 
 router = APIRouter()
+
+# Directory where uploaded PPK/SSH key files are stored
+_KEYS_DIR = Path.home() / ".servermind" / "keys"
+
+
+@router.post("/profiles/upload-key")
+async def upload_key_file(file: UploadFile = File(...)) -> JSONResponse:
+    """Upload a PPK or SSH private key file. Returns the saved file path."""
+    _KEYS_DIR.mkdir(parents=True, exist_ok=True)
+    # Use a UUID prefix to avoid filename collisions
+    safe_name = f"{uuid.uuid4().hex}_{Path(file.filename or 'key').name}"
+    dest = _KEYS_DIR / safe_name
+    content = await file.read()
+    dest.write_bytes(content)
+    return JSONResponse({"path": str(dest)})
 
 
 @router.get("/profiles", response_model=list[ProfileResponse])

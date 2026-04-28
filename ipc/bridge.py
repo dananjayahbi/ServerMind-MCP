@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from ipc.auth import validate_token
 from ipc.event_bus import get_async_queue, set_async_queue, set_running_loop
 from ipc.routes import health, logs, profiles, session, terminal
+from ipc.routes import webui_routes
 from ipc.websocket import get_ws_manager
 from shared.constants import IPC_API_PREFIX, IPC_BIND_HOST
 
@@ -23,7 +24,12 @@ app = FastAPI(title="ServerMind MCP IPC Bridge", version="1.0.0", docs_url=None)
 # CORS is intentionally restrictive — loopback only
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://127.0.0.1", "http://localhost"],
+    allow_origins=[
+        "http://127.0.0.1",
+        "http://localhost",
+        "http://127.0.0.1:17432",
+        "http://localhost:17432",
+    ],
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-IPC-Token"],
 )
@@ -33,7 +39,11 @@ app.add_middleware(
 # Authentication middleware
 # ------------------------------------------------------------------
 
-UNAUTHENTICATED_PATHS = {f"{IPC_API_PREFIX}/health"}
+UNAUTHENTICATED_PATHS = {
+    f"{IPC_API_PREFIX}/health",
+    "/ui",
+    "/ui/",
+}
 
 
 @app.middleware("http")
@@ -63,6 +73,7 @@ app.include_router(session.router, prefix=IPC_API_PREFIX)
 app.include_router(profiles.router, prefix=IPC_API_PREFIX)
 app.include_router(logs.router, prefix=IPC_API_PREFIX)
 app.include_router(terminal.router, prefix=IPC_API_PREFIX)
+app.include_router(webui_routes.router)
 
 
 # ------------------------------------------------------------------
@@ -77,6 +88,88 @@ async def _on_startup() -> None:
     q: asyncio.Queue = asyncio.Queue()
     set_async_queue(q)
     logger.debug("IPC bridge started; asyncio event loop captured")
+
+
+# ------------------------------------------------------------------
+# WebSocket: /ws/terminal/web  (raw PTY for xterm.js)
+# ------------------------------------------------------------------
+
+@app.websocket("/ws/terminal/web")
+async def websocket_terminal_web(websocket: WebSocket) -> None:
+    """Bidirectional raw PTY bridge for xterm.js web terminal."""
+    token = websocket.query_params.get("token", "")
+    if not validate_token(token):
+        await websocket.close(code=4001)
+        return
+
+    await websocket.accept()
+
+    from ssh.session_manager import get_manager as get_ssh_manager
+    ssh_manager = get_ssh_manager()
+    shell = ssh_manager.get_or_open_web_shell()
+    if shell is None:
+        await websocket.send_text("\r\nNo active SSH session. Connect a server first.\r\n")
+        await websocket.close()
+        return
+
+    loop = asyncio.get_running_loop()
+    output_queue: asyncio.Queue[bytes] = asyncio.Queue()
+
+    def _on_chunk(_cmd_id: str, chunk: str, _stream: str) -> None:
+        asyncio.run_coroutine_threadsafe(
+            output_queue.put(chunk.encode("utf-8", errors="replace")),
+            loop,
+        )
+
+    shell.add_output_callback(_on_chunk)
+
+    # The initial SSH banner + prompt may have already flowed through the shell's
+    # reader before this WS connected (callback was not yet registered).
+    # Send a blank line to trigger a fresh prompt so the user sees it immediately.
+    await asyncio.sleep(0.15)
+    if shell.is_open():
+        shell.send_input(b"\r\n")
+
+    async def _shell_to_ws() -> None:
+        try:
+            while True:
+                data = await output_queue.get()
+                await websocket.send_bytes(data)
+        except Exception:
+            pass
+
+    async def _ws_to_shell() -> None:
+        # xterm.js sends TEXT frames (onData returns strings); handle both
+        # text and binary so the WS never unexpectedly closes on input.
+        try:
+            while True:
+                raw = await websocket.receive()
+                msg_type = raw.get("type", "")
+                if msg_type == "websocket.disconnect":
+                    break
+                data: bytes | None = None
+                if raw.get("bytes"):
+                    data = raw["bytes"]
+                elif raw.get("text"):
+                    data = raw["text"].encode("utf-8")
+                if data and shell.is_open():
+                    shell.send_input(data)
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+
+    send_task = asyncio.create_task(_shell_to_ws())
+    recv_task = asyncio.create_task(_ws_to_shell())
+    try:
+        done, pending = await asyncio.wait(
+            [send_task, recv_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+    finally:
+        shell.remove_output_callback(_on_chunk)
 
 
 # ------------------------------------------------------------------
