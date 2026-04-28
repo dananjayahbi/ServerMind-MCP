@@ -39,6 +39,7 @@ class ShellChannel:
         self._channel: paramiko.Channel | None = None
         self._lock = threading.Lock()
         self._reader_thread: threading.Thread | None = None
+        self._reader_running: bool = False
         self._output_buf = ""
         self._buf_lock = threading.Lock()
 
@@ -50,15 +51,30 @@ class ShellChannel:
             transport = self._client.get_transport()
             if not transport or not transport.is_active():
                 raise RuntimeError("SSH transport is not active")
-            self._channel = self._client.invoke_shell(width=220, height=50)
+            self._channel = self._client.invoke_shell(term="xterm-256color", width=220, height=50)
             self._channel.setblocking(False)
-            # Consume initial prompt
-            time.sleep(0.3)
+            # Consume initial banner / prompt
+            time.sleep(0.4)
             self._drain_initial()
-        logger.debug("Shell channel opened")
+            # Suppress PTY echo and PS1/PS2/PROMPT_COMMAND so output is clean.
+            # stty -echo: stops the terminal from echoing what we type.
+            # PS1/PS2/PROMPT_COMMAND='': removes all prompt prefixes.
+            # HISTCONTROL: keeps these setup commands out of bash history.
+            setup = (
+                b"stty -echo 2>/dev/null; "
+                b"export PS1='' PS2='' PS3='' PS4='' PROMPT_COMMAND='' "
+                b"HISTCONTROL=ignoreboth\n"
+            )
+            self._channel.sendall(setup)
+            # Wait for setup to execute, then drain all resulting noise
+            time.sleep(0.5)
+            self._drain_initial()
+        logger.debug("Shell channel opened (echo + prompts suppressed)")
+        self._start_reader()
 
     def close(self) -> None:
         """Close the shell channel."""
+        self._reader_running = False
         with self._lock:
             if self._channel and not self._channel.closed:
                 try:
@@ -71,6 +87,49 @@ class ShellChannel:
     def is_open(self) -> bool:
         with self._lock:
             return bool(self._channel and not self._channel.closed)
+
+    def send_raw(self, text: str) -> None:
+        """Send raw text + newline to the interactive shell immediately."""
+        if not self.is_open():
+            raise RuntimeError("Shell channel is not open")
+        with self._lock:
+            self._channel.sendall((text + "\n").encode())
+
+    def _start_reader(self) -> None:
+        """Start the background reader thread that streams output chunks via callback."""
+        if self._reader_running:
+            return
+        self._reader_running = True
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop,
+            name="shell-reader",
+            daemon=True,
+        )
+        self._reader_thread.start()
+        logger.debug("Shell reader thread started")
+
+    def _reader_loop(self) -> None:
+        """Continuously read output from the shell channel and fire output_callback."""
+        while self._reader_running:
+            try:
+                ch = self._channel
+                if ch is None or ch.closed:
+                    break
+                if ch.recv_ready():
+                    data = ch.recv(SHELL_OUTPUT_BUFFER_SIZE)
+                    if data:
+                        chunk = data.decode("utf-8", errors="replace")
+                        if self._output_callback:
+                            try:
+                                self._output_callback("shell", chunk, "stdout")
+                            except Exception:
+                                logger.exception("Error in shell output callback")
+                else:
+                    time.sleep(0.02)
+            except Exception:
+                break
+        self._reader_running = False
+        logger.debug("Shell reader thread stopped")
 
     def send_command(
         self,

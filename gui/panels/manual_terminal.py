@@ -2,8 +2,23 @@
 
 from __future__ import annotations
 
+import re
 import threading
 import customtkinter as ctk
+
+# Strip ANSI/VT escape sequences including:
+#   CSI  - \x1b[ ... final-byte   (colors, cursor movement)
+#   OSC  - \x1b] ... BEL-or-ST    (title-bar sequences that leave '0;user@host:~' garbage)
+#   2-char Fe - \x1b + single char
+#   Orphan BEL (\x07) left behind by partial OSC matches
+_ANSI_ESCAPE = re.compile(
+    r"\x1b(?:"
+    r"\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC: ESC ] ... BEL  or  ESC ] ... ST  (must be first)
+    r"|\[[0-?]*[ -/]*[@-~]"            # CSI: ESC [ params final
+    r"|[@-~]"                          # 2-char: ESC + any 0x40-0x7E
+    r")"
+    r"|\x07"                           # orphan BEL
+)
 
 
 class ManualTerminalPanel(ctk.CTkFrame):
@@ -73,24 +88,20 @@ class ManualTerminalPanel(ctk.CTkFrame):
             result = self._ipc.send_terminal_input(cmd)
             if result is None:
                 self._append_output("[error] Could not reach backend.\n")
-                return
-            status = result.get("status", "")
-            stdout = result.get("stdout", "")
-            stderr = result.get("stderr", "")
-            exit_code = result.get("exit_code")
-            if stdout:
-                self._append_output(stdout if stdout.endswith("\n") else stdout + "\n")
-            if stderr:
-                self._append_output(f"[stderr] {stderr}" if stderr.endswith("\n") else f"[stderr] {stderr}\n")
-            if status == "error" or (not stdout and not stderr):
-                msg = result.get("message", "")
-                if msg and msg != "ok":
-                    self._append_output(f"[error] {msg}\n")
-                elif not stdout and not stderr:
-                    code_str = f" (exit {exit_code})" if exit_code is not None else ""
-                    self._append_output(f"[done{code_str}]\n")
+            elif result.get("status") == "error":
+                msg = result.get("message", "Command failed")
+                self._append_output(f"[error] {msg}\n")
+            # Output arrives via WebSocket terminal.output_chunk events
 
         threading.Thread(target=run, daemon=True).start()
+
+    def append_chunk(self, chunk: str) -> None:
+        """Append a streaming output chunk from the PTY shell (called from WS event)."""
+        clean = _ANSI_ESCAPE.sub("", chunk)
+        # Normalize PTY line endings: \r\n -> \n, bare \r -> nothing
+        clean = clean.replace("\r\n", "\n").replace("\r", "")
+        if clean:
+            self._append_output(clean)
 
     def _append_output(self, text: str) -> None:
         self._output.configure(state="normal")

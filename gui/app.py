@@ -213,14 +213,23 @@ class ServerMindApp(ctk.CTk):
 
     def _on_ws_event(self, event: dict) -> None:
         event_type = event.get("type", "")
-        data = event.get("data", {})
+        data = event.get("payload", {})
 
-        if event_type == "SESSION_STATE_CHANGED":
+        if event_type == "session.state_changed":
             self._bridge.post(lambda d=data: self._state.update_session(d))
-        elif event_type == "LOG_ENTRY":
+        elif event_type == "log.entry":
             self._bridge.post(lambda d=data: self._state.append_log(d))
-        elif event_type == "COMMAND_COMPLETED":
+        elif event_type == "command.completed":
             pass  # Future: notify terminal panel
+        elif event_type == "terminal.output_chunk":
+            chunk = data.get("chunk", "") if isinstance(data, dict) else ""
+            if chunk:
+                self._bridge.post(lambda c=chunk: self._route_terminal_chunk(c))
+
+    def _route_terminal_chunk(self, chunk: str) -> None:
+        terminal_panel = self._panels.get("terminal")
+        if terminal_panel and hasattr(terminal_panel, "append_chunk"):
+            terminal_panel.append_chunk(chunk)
 
     def _drain_bridge(self) -> None:
         """Process queued bridge tasks every 50ms."""

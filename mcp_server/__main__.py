@@ -107,7 +107,18 @@ def main() -> None:
 
     add_state_change_callback(_on_state_change)
 
-    # 8. Wire command results -> IPC event bus
+    # 8. Wire terminal output chunks -> IPC event bus
+    def _on_terminal_chunk(session_uuid: str, command_id: str, chunk: str, stream: str) -> None:
+        publish_sync(WSEventType.TERMINAL_OUTPUT_CHUNK, {
+            "session_uuid": session_uuid,
+            "command_id": command_id,
+            "chunk": chunk,
+            "stream": stream,
+        })
+
+    get_ssh_manager().set_terminal_output_callback(_on_terminal_chunk)
+
+    # 9. Wire command results -> IPC event bus
     def _on_command_result(result) -> None:
         publish_sync(WSEventType.COMMAND_COMPLETED, result.to_dict())
 
@@ -115,7 +126,7 @@ def main() -> None:
 
     audit_log.info(EventCategory.SYSTEM, "MCP backend started successfully")
 
-    # 9. Start MCP protocol listener
+    # 10. Start MCP protocol listener
     from mcp_server.server import create_server
     mcp_server = create_server()
 

@@ -47,6 +47,7 @@ class ExecMode:
 # Command result statuses
 class CommandStatus:
     COMPLETED = "COMPLETED"
+    SENT = "SENT"
     TIMED_OUT = "TIMED_OUT"
     ERROR = "ERROR"
     SESSION_UNAVAILABLE = "SESSION_UNAVAILABLE"

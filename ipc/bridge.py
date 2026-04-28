@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from ipc.auth import validate_token
-from ipc.event_bus import get_async_queue, set_async_queue
+from ipc.event_bus import get_async_queue, set_async_queue, set_running_loop
 from ipc.routes import health, logs, profiles, session, terminal
 from ipc.websocket import get_ws_manager
 from shared.constants import IPC_API_PREFIX, IPC_BIND_HOST
@@ -63,6 +63,20 @@ app.include_router(session.router, prefix=IPC_API_PREFIX)
 app.include_router(profiles.router, prefix=IPC_API_PREFIX)
 app.include_router(logs.router, prefix=IPC_API_PREFIX)
 app.include_router(terminal.router, prefix=IPC_API_PREFIX)
+
+
+# ------------------------------------------------------------------
+# Startup: capture event loop so background threads can publish events
+# ------------------------------------------------------------------
+
+@app.on_event("startup")
+async def _on_startup() -> None:
+    loop = asyncio.get_running_loop()
+    set_running_loop(loop)
+    # Recreate the Queue inside the correct event loop
+    q: asyncio.Queue = asyncio.Queue()
+    set_async_queue(q)
+    logger.debug("IPC bridge started; asyncio event loop captured")
 
 
 # ------------------------------------------------------------------

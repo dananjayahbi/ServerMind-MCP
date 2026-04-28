@@ -379,7 +379,16 @@ class SessionManager:
                 stderr="Could not open shell channel.",
             )
 
-        return shell.send_command(request, wait_ms=1000)
+        shell.send_raw(request.command_text)
+        from shared.constants import CommandStatus
+        return CommandResult(
+            command_id=request.command_id,
+            status=CommandStatus.SENT,
+            stdout="",
+            stderr="",
+            exit_code=None,
+            duration_ms=0,
+        )
 
     # ------------------------------------------------------------------
     # State Access
