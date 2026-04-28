@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "servermind": {
+      "command": "servermind-mcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}

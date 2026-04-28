@@ -1,0 +1,1 @@
+"""ServerMind MCP test suite."""

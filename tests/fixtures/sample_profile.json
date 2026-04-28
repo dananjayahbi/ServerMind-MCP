@@ -1,0 +1,10 @@
+{
+  "id": "test-profile-00000000-0000-0000-0000-000000000001",
+  "display_name": "Test Server",
+  "hostname": "192.168.1.100",
+  "port": 22,
+  "username": "testuser",
+  "auth_method": "password",
+  "notes": "Test fixture profile for unit tests",
+  "tags": ["test", "fixture"]
+}

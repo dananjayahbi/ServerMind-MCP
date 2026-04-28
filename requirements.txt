@@ -1,0 +1,34 @@
+# ServerMind MCP - Python Dependencies
+# Install with: pip install -r requirements.txt
+#
+# For development extras (pytest, linting, type checking), also run:
+#   pip install -r requirements-dev.txt
+
+# MCP SDK (Anthropic Model Context Protocol)
+mcp>=1.0.0
+
+# SSH client with PPK v2/v3 support
+paramiko>=3.4.0
+
+# IPC bridge REST API
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+
+# WebSocket support
+websockets>=12.0
+websocket-client>=1.8.0
+
+# API request/response validation
+pydantic>=2.7.0
+
+# JSON Schema validation for config files and tool inputs
+jsonschema>=4.22.0
+
+# Cryptography (IPC token generation)
+cryptography>=42.0.0
+
+# Desktop GUI
+customtkinter>=5.2.2
+
+# HTTP client for GUI IPC calls
+httpx>=0.27.0

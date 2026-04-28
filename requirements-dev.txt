@@ -1,0 +1,17 @@
+# ServerMind MCP - Development Dependencies
+# Install with: pip install -r requirements-dev.txt
+# (Also requires base dependencies: pip install -r requirements.txt first)
+
+# Testing
+pytest>=8.2.0
+pytest-asyncio>=0.23.0
+pytest-mock>=3.14.0
+
+# Code formatting
+black>=24.4.0
+
+# Linting
+ruff>=0.4.0
+
+# Type checking
+mypy>=1.10.0

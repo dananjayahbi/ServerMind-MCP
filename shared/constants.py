@@ -1,0 +1,80 @@
+"""Application-wide constants for ServerMind MCP."""
+
+APP_NAME = "servermind-mcp"
+APP_VERSION = "1.0.0"
+
+# IPC defaults
+DEFAULT_IPC_PORT = 17432
+IPC_BIND_HOST = "127.0.0.1"
+IPC_API_PREFIX = "/api/v1"
+
+# Session states
+class SessionState:
+    DISCONNECTED = "DISCONNECTED"
+    CONNECTING = "CONNECTING"
+    CONNECTED = "CONNECTED"
+    RECONNECTING = "RECONNECTING"
+    FAULT = "FAULT"
+
+# Event categories
+class EventCategory:
+    CONNECTION = "CONNECTION"
+    COMMAND = "COMMAND"
+    CONFIG = "CONFIG"
+    IPC = "IPC"
+    SYSTEM = "SYSTEM"
+    SECURITY = "SECURITY"
+
+# Log levels
+class LogLevel:
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+    CRITICAL = "CRITICAL"
+
+# Actor identities
+class Actor:
+    OPERATOR = "OPERATOR"
+    AGENT = "AGENT"
+    SYSTEM = "SYSTEM"
+
+# Execution modes
+class ExecMode:
+    EXEC = "EXEC"
+    SHELL = "SHELL"
+
+# Command result statuses
+class CommandStatus:
+    COMPLETED = "COMPLETED"
+    TIMED_OUT = "TIMED_OUT"
+    ERROR = "ERROR"
+    SESSION_UNAVAILABLE = "SESSION_UNAVAILABLE"
+
+# WebSocket event types
+class WSEventType:
+    LOG_ENTRY = "log.entry"
+    SESSION_STATE_CHANGED = "session.state_changed"
+    COMMAND_COMPLETED = "command.completed"
+    TERMINAL_OUTPUT_CHUNK = "terminal.output_chunk"
+    KEEPALIVE_HEARTBEAT = "keepalive.heartbeat"
+    CONFIG_CHANGED = "config.changed"
+
+# Config defaults
+DEFAULT_SSH_PORT = 22
+DEFAULT_KEEPALIVE_TRANSPORT_INTERVAL = 30
+DEFAULT_KEEPALIVE_APP_INTERVAL = 60
+DEFAULT_CONNECTION_TIMEOUT = 30
+DEFAULT_RECONNECT_BASE_DELAY = 5
+DEFAULT_MAX_RECONNECT_INTERVAL = 120
+DEFAULT_COMMAND_TIMEOUT = 300
+DEFAULT_MAX_OUTPUT_SIZE = 4 * 1024 * 1024  # 4 MB
+DEFAULT_LOG_BUFFER_SIZE = 5000
+DEFAULT_LOG_MAX_FILE_SIZE_MB = 10
+DEFAULT_LOG_BACKUP_COUNT = 5
+DEFAULT_IPC_POLL_INTERVAL_MS = 2000
+SHELL_OUTPUT_BUFFER_SIZE = 512
+COMMAND_HISTORY_MAX = 200
+GUI_EVENT_POLL_INTERVAL_MS = 50
+SHUTDOWN_WAIT_TIMEOUT_SEC = 10
+SCHEMA_VERSION = 1
