@@ -53,3 +53,34 @@ model CachedSettings {
   default_command_timeout   Int    @default(300)
   synced_at                 DateTime @default(now())
 }
+
+// ─── Workflow Builder ──────────────────────────────────────────────────────────
+
+// A saved automation workflow (node graph)
+model Workflow {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  nodes       String   // JSON: WFNode[]
+  edges       String   // JSON: WFEdge[]
+  variables   String   @default("[]") // JSON: WFVariableDef[]
+  tags        String?  // JSON: string[]
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  executions  WorkflowExecution[]
+}
+
+// A single run of a workflow against a server
+model WorkflowExecution {
+  id           String   @id @default(cuid())
+  workflow_id  String
+  workflow     Workflow @relation(fields: [workflow_id], references: [id], onDelete: Cascade)
+  profile_id   String?  // server it ran on
+  status       String   @default("pending") // pending|running|success|failed|cancelled
+  variables    String   @default("{}") // JSON: Record<string, string> actual values
+  logs         String   @default("[]") // JSON: WFExecutionLog[]
+  error        String?
+  started_at   DateTime @default(now())
+  completed_at DateTime?
+}

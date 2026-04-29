@@ -4,8 +4,9 @@ MCP backend entry point.
 Startup sequence:
 1. Load configuration
 2. Start audit logger
-3. Generate IPC token and write runtime state file
-4. Start IPC bridge (FastAPI) in a background thread
+3. Determine IPC port — reuse existing bridge if one is already running,
+   otherwise find a free port and start a new bridge.
+4. Start IPC bridge (FastAPI) in a background thread  [skipped if reusing]
 5. Start command queue consumer
 6. Start MCP protocol listener (stdio or SSE)
 """
@@ -15,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import socket
 import sys
 import threading
 
@@ -39,6 +41,34 @@ def _parse_args() -> argparse.Namespace:
         help="Port for SSE transport (default: 17433)",
     )
     return parser.parse_args()
+
+
+def _is_port_in_use(host: str, port: int) -> bool:
+    """Return True if something is already listening on host:port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex((host, port)) == 0
+
+
+def _find_free_port(host: str, preferred: int) -> int:
+    """Return *preferred* if it's free, otherwise find any free port."""
+    if not _is_port_in_use(host, preferred):
+        return preferred
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind((host, 0))
+        return s.getsockname()[1]
+
+
+def _check_ipc_health(host: str, port: int) -> bool:
+    """Return True if the IPC bridge health endpoint responds with 200."""
+    import urllib.request
+    import urllib.error
+    try:
+        url = f"http://{host}:{port}/api/v1/health"
+        with urllib.request.urlopen(url, timeout=2) as resp:  # noqa: S310
+            return resp.status == 200
+    except Exception:
+        return False
 
 
 def _start_ipc_bridge(port: int, token: str) -> None:
@@ -74,16 +104,42 @@ def main() -> None:
     )
     audit_log.info(EventCategory.SYSTEM, "MCP backend starting up")
 
-    # 3. Generate IPC token and write runtime state
-    from ipc.auth import generate_token, write_runtime_state, set_current_token
-    ipc_port = settings.get("ipc_port", 17432)
-    token = generate_token()
-    set_current_token(token)
-    write_runtime_state(token=token, port=ipc_port)
-    logger.info("IPC token generated; runtime state written")
+    # 3. Determine IPC port / token — share an existing bridge if one is healthy
+    from ipc.auth import (
+        generate_token, write_runtime_state, set_current_token, read_runtime_state,
+    )
+    from shared.constants import IPC_BIND_HOST
 
-    # 4. Start IPC bridge in background thread
-    _start_ipc_bridge(port=ipc_port, token=token)
+    ipc_port = settings.get("ipc_port", 17432)
+    existing = read_runtime_state()
+    existing_port = existing.get("ipc_port", ipc_port) if existing else ipc_port
+    existing_token = existing.get("ipc_token", "") if existing else ""
+
+    if (
+        existing
+        and _is_port_in_use(IPC_BIND_HOST, existing_port)
+        and _check_ipc_health(IPC_BIND_HOST, existing_port)
+    ):
+        # Another instance is already running a healthy IPC bridge.
+        # Reuse it — do NOT overwrite runtime.json and do NOT start a new bridge.
+        token = existing_token
+        ipc_port = existing_port
+        set_current_token(token)
+        logger.info(
+            "IPC bridge already running on port %d — reusing existing instance",
+            ipc_port,
+        )
+    else:
+        # Either no bridge is running or it is unresponsive.
+        # Find a free port (falls back to a random port if preferred is taken).
+        ipc_port = _find_free_port(IPC_BIND_HOST, ipc_port)
+        token = generate_token()
+        set_current_token(token)
+        write_runtime_state(token=token, port=ipc_port)
+        logger.info("IPC token generated; runtime state written (port=%d)", ipc_port)
+
+        # 4. Start IPC bridge in background thread
+        _start_ipc_bridge(port=ipc_port, token=token)
 
     # 5. Start command queue consumer
     from pipeline.queue_manager import get_queue_manager

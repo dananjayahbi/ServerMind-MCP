@@ -1,0 +1,413 @@
+"use client";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import {
+  ArrowLeft, Play, Server, CheckCircle2, XCircle, Loader2, Clock,
+  ChevronDown, ChevronUp, RefreshCw, GitBranch, Zap, Terminal, Code2,
+  FileCode2, Braces, StickyNote, AlertTriangle, History
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import type { Workflow, WFVariableDef, WorkflowExecution, WFNodeLog } from "@/types/workflow";
+import { useAppStore } from "@/lib/store";
+
+function nodeIcon(type: string) {
+  switch (type) {
+    case "trigger": return <Zap size={12} className="text-[#49C5B6]" />;
+    case "command": return <Terminal size={12} className="text-[#F59E0B]" />;
+    case "script": return <Code2 size={12} className="text-[#A78BFA]" />;
+    case "file_write": return <FileCode2 size={12} className="text-[#60A5FA]" />;
+    case "variable": return <Braces size={12} className="text-[#FB923C]" />;
+    case "note": return <StickyNote size={12} className="text-[#FBBF24]" />;
+    default: return <Zap size={12} className="text-[#49C5B6]" />;
+  }
+}
+
+function StatusBadge({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    pending: "bg-[#1A1A1A] text-[#666] border-[#2A2A2A]",
+    running: "bg-[#49C5B6]/10 text-[#49C5B6] border-[#49C5B6]/30",
+    success: "bg-[#10B981]/10 text-[#10B981] border-[#10B981]/30",
+    failed: "bg-[#EF4444]/10 text-[#EF4444] border-[#EF4444]/30",
+    cancelled: "bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/30",
+    skipped: "bg-[#1A1A1A] text-[#555] border-[#2A2A2A]",
+  };
+  return (
+    <span className={cn("text-[10px] px-2 py-0.5 rounded border font-medium uppercase tracking-wide", map[status] ?? map.pending)}>
+      {status}
+    </span>
+  );
+}
+
+function NodeLogRow({ log }: { log: WFNodeLog }) {
+  const [expanded, setExpanded] = useState(false);
+  const hasOutput = !!(log.output || log.error);
+  return (
+    <div className={cn(
+      "rounded-xl border transition-all",
+      log.status === "failed" ? "border-[#EF4444]/30 bg-[#1A0808]" :
+      log.status === "success" ? "border-[#10B981]/20 bg-[#081A10]" :
+      log.status === "running" ? "border-[#49C5B6]/30 bg-[#081A18] animate-pulse" :
+      "border-[#2A2A2A] bg-[#111111]"
+    )}>
+      <div className="flex items-center gap-3 px-4 py-3">
+        <div className="flex-shrink-0">
+          {log.status === "success" && <CheckCircle2 size={15} className="text-[#10B981]" />}
+          {log.status === "failed" && <XCircle size={15} className="text-[#EF4444]" />}
+          {log.status === "running" && <Loader2 size={15} className="text-[#49C5B6] animate-spin" />}
+          {log.status === "skipped" && <Clock size={15} className="text-[#555]" />}
+          {log.status === "pending" && <Clock size={15} className="text-[#555]" />}
+        </div>
+        <p className="text-[13px] font-medium text-[#E2E2E2] flex-1 min-w-0 truncate">{log.node_label}</p>
+        <StatusBadge status={log.status} />
+        {log.completed_at && log.started_at && (
+          <span className="text-[10px] text-[#555] whitespace-nowrap hidden sm:block">
+            {((new Date(log.completed_at).getTime() - new Date(log.started_at).getTime()) / 1000).toFixed(1)}s
+          </span>
+        )}
+        {hasOutput && (
+          <button onClick={() => setExpanded((v) => !v)} className="text-[#555] hover:text-[#A3A3A3] transition-colors">
+            {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+          </button>
+        )}
+      </div>
+      {expanded && hasOutput && (
+        <div className="px-4 pb-3">
+          {log.output && (
+            <pre className="rounded-lg bg-[#0D0D0D] p-3 text-[11px] text-[#A3A3A3] font-mono overflow-x-auto max-h-40 whitespace-pre-wrap break-all">
+              {log.output}
+            </pre>
+          )}
+          {log.error && (
+            <pre className="rounded-lg bg-[#1A0808] border border-[#EF4444]/20 p-3 text-[11px] text-[#EF4444] font-mono overflow-x-auto max-h-40 whitespace-pre-wrap break-all mt-2">
+              {log.error}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function WorkflowRunPage() {
+  const { id } = useParams<{ id: string }>();
+  const router = useRouter();
+  const { profiles } = useAppStore();
+
+  const [workflow, setWorkflow] = useState<Workflow | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [vars, setVars] = useState<Record<string, string>>({});
+  const [profileId, setProfileId] = useState("");
+  const [running, setRunning] = useState(false);
+  const [execId, setExecId] = useState<string | null>(null);
+  const [execution, setExecution] = useState<WorkflowExecution | null>(null);
+  const [pastExecutions, setPastExecutions] = useState<WorkflowExecution[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      try {
+        const res = await fetch(`/api/workflows/${id}`);
+        if (res.ok) {
+          const wf: Workflow = await res.json();
+          setWorkflow(wf);
+          // Pre-fill defaults
+          const defaults: Record<string, string> = {};
+          for (const v of wf.variables) {
+            defaults[v.key] = v.default || "";
+          }
+          setVars(defaults);
+        }
+        // Load past executions
+        const histRes = await fetch(`/api/workflows/${id}/run`);
+        if (histRes.ok) setPastExecutions(await histRes.json());
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+    // Pre-select profile if only one
+    if (profiles.length === 1) setProfileId(profiles[0].id);
+  }, [id, profiles]);
+
+  useEffect(() => {
+    if (!execId) return;
+    pollRef.current = setInterval(async () => {
+      const res = await fetch(`/api/workflows/executions/${execId}`);
+      if (res.ok) {
+        const ex: WorkflowExecution = await res.json();
+        setExecution(ex);
+        if (ex.status === "success" || ex.status === "failed" || ex.status === "cancelled") {
+          if (pollRef.current) clearInterval(pollRef.current);
+          setRunning(false);
+          // Refresh history
+          const histRes = await fetch(`/api/workflows/${id}/run`);
+          if (histRes.ok) setPastExecutions(await histRes.json());
+        }
+      }
+    }, 1000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [execId]);
+
+  async function handleRun() {
+    if (!workflow) return;
+    setRunning(true);
+    setExecution(null);
+    setExecId(null);
+    try {
+      const res = await fetch(`/api/workflows/${id}/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ variables: vars, profile_id: profileId || null }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setExecId(data.execution_id);
+        setExecution({ id: data.execution_id, workflow_id: id, profile_id: profileId || null, status: "running", variables: vars, logs: [], started_at: new Date().toISOString() });
+      } else {
+        const err = await res.json();
+        alert(err.error || "Failed to start workflow");
+        setRunning(false);
+      }
+    } catch (e) {
+      alert(String(e));
+      setRunning(false);
+    }
+  }
+
+  function loadExecution(ex: WorkflowExecution) {
+    setExecution(ex);
+    setExecId(null); // not polling, static view
+    setShowHistory(false);
+  }
+
+  if (loading) {
+    return (
+      <div className="flex flex-col h-full items-center justify-center text-[#555]">
+        <Loader2 size={28} className="animate-spin mb-3 text-[#49C5B6]" />
+        <p className="text-sm">Loading workflow...</p>
+      </div>
+    );
+  }
+
+  if (!workflow) {
+    return (
+      <div className="flex flex-col h-full items-center justify-center">
+        <p className="text-[#EF4444] mb-2">Workflow not found</p>
+        <Link href="/workflows" className="text-[#49C5B6] text-sm">Back to workflows</Link>
+      </div>
+    );
+  }
+
+  const requiredMissing = workflow.variables.filter((v) => v.required && !vars[v.key]);
+
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-3 px-4 py-2.5 bg-[#111111] border-b border-[#2A2A2A] flex-shrink-0">
+        <Link href={`/workflows/${id}`} className="p-1.5 rounded-lg text-[#666] hover:text-[#F2F2F2] hover:bg-[#1A1A1A] transition-colors">
+          <ArrowLeft size={16} />
+        </Link>
+        <div className="w-px h-5 bg-[#2A2A2A]" />
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <Play size={14} className="text-[#49C5B6] flex-shrink-0" />
+          <div className="min-w-0">
+            <p className="text-[13px] font-semibold text-[#F2F2F2] truncate">{workflow.name}</p>
+          </div>
+        </div>
+        <button
+          onClick={() => setShowHistory(!showHistory)}
+          className={cn(
+            "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] transition-colors border",
+            showHistory
+              ? "bg-[#49C5B6]/10 text-[#49C5B6] border-[#49C5B6]/30"
+              : "bg-[#1A1A1A] border-[#2A2A2A] text-[#666] hover:text-[#A3A3A3]"
+          )}
+        >
+          <History size={13} />
+          History ({pastExecutions.length})
+        </button>
+      </div>
+
+      <div className="flex flex-1 overflow-hidden">
+        {/* Left: config + run */}
+        <div className="w-[320px] flex-shrink-0 flex flex-col border-r border-[#2A2A2A] bg-[#111111] overflow-y-auto">
+          <div className="p-4 space-y-4">
+            {/* Server selection */}
+            <div>
+              <label className="block text-[11px] font-medium text-[#666] uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                <Server size={11} />
+                Target Server
+              </label>
+              <select
+                value={profileId}
+                onChange={(e) => setProfileId(e.target.value)}
+                className="w-full bg-[#1A1A1A] border border-[#2A2A2A] rounded-lg px-3 py-2 text-sm text-[#F2F2F2] focus:border-[#49C5B6] focus:outline-none"
+              >
+                <option value="">— Select server (optional) —</option>
+                {profiles.map((p) => (
+                  <option key={p.id} value={p.id}>{p.display_name} ({p.hostname})</option>
+                ))}
+              </select>
+              {!profileId && (
+                <p className="text-[10px] text-[#F59E0B] mt-1 flex items-center gap-1">
+                  <AlertTriangle size={10} />
+                  No server selected — commands will use current session
+                </p>
+              )}
+            </div>
+
+            {/* Variables */}
+            {workflow.variables.length > 0 && (
+              <div>
+                <label className="block text-[11px] font-medium text-[#666] uppercase tracking-wider mb-2">
+                  Variables ({workflow.variables.length})
+                </label>
+                <div className="space-y-2.5">
+                  {workflow.variables.map((v) => (
+                    <div key={v.key}>
+                      <label className="block text-[11px] text-[#A3A3A3] mb-1">
+                        <span className="font-mono text-[#FB923C]">{"{{" + v.key + "}}"}</span>
+                        {" "}{v.label}
+                        {v.required && <span className="text-[#EF4444] ml-1">*</span>}
+                      </label>
+                      {v.description && (
+                        <p className="text-[10px] text-[#555] mb-1">{v.description}</p>
+                      )}
+                      <input
+                        value={vars[v.key] ?? ""}
+                        onChange={(e) => setVars((prev) => ({ ...prev, [v.key]: e.target.value }))}
+                        placeholder={v.default || v.label}
+                        className="w-full bg-[#0D0D0D] border border-[#2A2A2A] rounded-lg px-3 py-2 text-sm text-[#F2F2F2] font-mono focus:border-[#49C5B6] focus:outline-none placeholder:text-[#333]"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Required missing warning */}
+            {requiredMissing.length > 0 && (
+              <div className="rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 p-3 flex items-start gap-2">
+                <AlertTriangle size={14} className="text-[#F59E0B] flex-shrink-0 mt-0.5" />
+                <p className="text-[12px] text-[#F59E0B]">
+                  {requiredMissing.length} required variable{requiredMissing.length > 1 ? "s" : ""} missing:{" "}
+                  {requiredMissing.map((v) => v.key).join(", ")}
+                </p>
+              </div>
+            )}
+
+            {/* Run button */}
+            <button
+              onClick={handleRun}
+              disabled={running || requiredMissing.length > 0}
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-[#49C5B6] text-[#0D0D0D] font-bold text-sm hover:bg-[#3DB5A6] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {running ? (
+                <><Loader2 size={16} className="animate-spin" />Running...</>
+              ) : (
+                <><Play size={16} />Run Workflow</>
+              )}
+            </button>
+
+            {/* Workflow summary */}
+            <div className="rounded-xl bg-[#0D0D0D] border border-[#2A2A2A] p-3 space-y-1.5">
+              <p className="text-[11px] uppercase tracking-widest text-[#555] font-medium">Workflow Summary</p>
+              <div className="flex items-center justify-between text-[12px]">
+                <span className="text-[#666]">Nodes</span>
+                <span className="text-[#A3A3A3]">{workflow.nodes.length}</span>
+              </div>
+              <div className="flex items-center justify-between text-[12px]">
+                <span className="text-[#666]">Variables</span>
+                <span className="text-[#A3A3A3]">{workflow.variables.length}</span>
+              </div>
+              <div className="flex items-center justify-between text-[12px]">
+                <span className="text-[#666]">Runs</span>
+                <span className="text-[#A3A3A3]">{pastExecutions.length}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right: execution log or history */}
+        <div className="flex-1 overflow-y-auto bg-[#0D0D0D] p-4">
+          {showHistory ? (
+            <div className="space-y-3 max-w-2xl">
+              <p className="text-[11px] uppercase tracking-widest text-[#49C5B6] font-semibold mb-3">Execution History</p>
+              {pastExecutions.length === 0 ? (
+                <p className="text-[13px] text-[#555] italic">No executions yet</p>
+              ) : (
+                pastExecutions.map((ex) => (
+                  <button
+                    key={ex.id}
+                    onClick={() => loadExecution(ex)}
+                    className="w-full text-left rounded-xl bg-[#111111] border border-[#2A2A2A] hover:border-[#3A3A3A] p-4 transition-all flex items-center gap-4"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <StatusBadge status={ex.status} />
+                        <span className="text-[11px] text-[#555]">{new Date(ex.started_at).toLocaleString()}</span>
+                      </div>
+                      <p className="text-[11px] text-[#555]">
+                        {ex.logs.length} steps · Profile: {ex.profile_id ? profiles.find((p) => p.id === ex.profile_id)?.display_name ?? ex.profile_id : "none"}
+                      </p>
+                    </div>
+                    <ChevronDown size={14} className="text-[#555] rotate-[-90deg]" />
+                  </button>
+                ))
+              )}
+            </div>
+          ) : execution ? (
+            <div className="max-w-2xl space-y-4">
+              {/* Execution header */}
+              <div className="rounded-xl bg-[#111111] border border-[#2A2A2A] p-4 flex items-center gap-4">
+                <div>
+                  {execution.status === "running" && <Loader2 size={20} className="text-[#49C5B6] animate-spin" />}
+                  {execution.status === "success" && <CheckCircle2 size={20} className="text-[#10B981]" />}
+                  {execution.status === "failed" && <XCircle size={20} className="text-[#EF4444]" />}
+                  {(execution.status === "pending" || execution.status === "cancelled") && <Clock size={20} className="text-[#666]" />}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <StatusBadge status={execution.status} />
+                    <span className="text-[11px] text-[#555]">Started {new Date(execution.started_at).toLocaleString()}</span>
+                  </div>
+                  {execution.error && <p className="text-[12px] text-[#EF4444] mt-1">{execution.error}</p>}
+                </div>
+                {execution.status === "running" && (
+                  <div className="flex items-center gap-1 text-[11px] text-[#49C5B6]">
+                    <RefreshCw size={11} className="animate-spin" />
+                    Live
+                  </div>
+                )}
+              </div>
+
+              {/* Node logs */}
+              <div className="space-y-2">
+                {execution.logs.map((log) => (
+                  <NodeLogRow key={log.node_id} log={log} />
+                ))}
+                {execution.logs.length === 0 && execution.status === "running" && (
+                  <div className="flex items-center gap-2 text-[#555] text-sm">
+                    <Loader2 size={14} className="animate-spin text-[#49C5B6]" />
+                    Initializing...
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full text-center">
+              <div className="w-16 h-16 rounded-2xl bg-[#111111] border border-[#2A2A2A] flex items-center justify-center mb-4">
+                <Play size={24} className="text-[#333]" />
+              </div>
+              <p className="text-[14px] font-medium text-[#555]">Ready to run</p>
+              <p className="text-[12px] text-[#444] mt-1">Configure variables and click Run Workflow</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

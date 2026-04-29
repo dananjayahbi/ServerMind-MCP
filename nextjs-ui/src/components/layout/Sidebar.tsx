@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Activity,
   BarChart2,
+  GitBranch,
 } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -20,6 +21,7 @@ const NAV_ITEMS = [
   { href: "/terminal", label: "Terminal", icon: Terminal },
   { href: "/statistics", label: "Statistics", icon: BarChart2 },
   { href: "/servers", label: "Servers", icon: Server },
+  { href: "/workflows", label: "Workflows", icon: GitBranch },
   { href: "/logs", label: "Audit Log", icon: FileText },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
