@@ -3,6 +3,16 @@ import { prisma } from "@/lib/prisma";
 import { ipcFetch } from "@/lib/ipc-client";
 import type { WFNode, WFEdge, WFNodeLog, CommandNodeData, ScriptNodeData, FileWriteNodeData, DelayNodeData } from "@/types/workflow";
 
+async function sendToTerminal(text: string): Promise<void> {
+  try {
+    const res = await ipcFetch("/session/terminal/inject", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    });
+    await res.text(); // drain
+  } catch { /* non-critical */ }
+}
+
 function interpolate(text: string, vars: Record<string, string>): string {
   return text.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? `{{${key}}}`);
 }
@@ -34,7 +44,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   });
 
   // Run in background
-  runWorkflow(execution.id, nodes, edges, inputVars).catch(console.error);
+  runWorkflow(execution.id, nodes, edges, inputVars, profile_id).catch(console.error);
 
   return NextResponse.json({ execution_id: execution.id, status: "running" }, { status: 202 });
 }
@@ -66,9 +76,19 @@ async function runWorkflow(
   execId: string,
   nodes: WFNode[],
   edges: WFEdge[],
-  vars: Record<string, string>
+  vars: Record<string, string>,
+  profileId?: string | null,
 ) {
   const logs: WFNodeLog[] = [];
+
+  // Resolve prompt string from profile (username@hostname:~$)
+  let prompt = "server:~$";
+  if (profileId) {
+    try {
+      const prof = await prisma.cachedProfile.findUnique({ where: { id: profileId } });
+      if (prof) prompt = `${prof.username}@${prof.hostname}:~$`;
+    } catch { /* ignore */ }
+  }
 
   async function appendLog(log: WFNodeLog) {
     logs.push(log);
@@ -80,6 +100,9 @@ async function runWorkflow(
 
   // Topological sort: find execution order
   const ordered = topoSort(nodes, edges);
+
+  await sendToTerminal(`\r\n\x1b[36m\u2501\u2501\u2501 Workflow: ${execId} \u2501\u2501\u2501\x1b[0m\r\n`);
+  await sendToTerminal(`\x1b[2m${prompt}\x1b[0m\r\n\r\n`);
 
   try {
     for (const node of ordered) {
@@ -95,31 +118,40 @@ async function runWorkflow(
 
       try {
         let output = "";
+        let commandText = "";
 
         if (node.type === "command") {
           const data = node.data as CommandNodeData;
-          const cmd = interpolate(data.command, vars);
+          commandText = interpolate(data.command, vars);
+          await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1m${commandText}\x1b[0m\r\n`);
           const res = await ipcFetch("/exec", {
             method: "POST",
-            body: JSON.stringify({ command: cmd, timeout: data.timeout || 300 }),
+            body: JSON.stringify({ command: commandText, timeout_sec: data.timeout || 300 }),
           });
           const result = await res.json();
-          output = result.output || result.stdout || "";
+          const _stdout = result.stdout || "";
+          const _stderr = result.stderr || "";
+          output = [_stdout, _stderr].filter((s) => s.trim()).join("\n");
+          if (output) await sendToTerminal(`${output}\r\n`);
           if (!res.ok && !data.continue_on_error) {
             throw new Error(result.detail || result.error || `Command failed (${res.status})`);
           }
         } else if (node.type === "script") {
           const data = node.data as ScriptNodeData;
           const script = interpolate(data.script, vars);
+          commandText = `bash <<'EOF'\n${script}\nEOF`;
+          await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1mbash <<'EOF'\x1b[0m\r\n\x1b[2m${script}\x1b[0m\r\n\x1b[2mEOF\x1b[0m\r\n`);
           const tmpPath = `/tmp/wf_script_${execId}_${node.id}.sh`;
-          // Write script then execute
           const writeCmd = `cat > ${tmpPath} << 'WFEOF'\n${script}\nWFEOF\nchmod +x ${tmpPath} && bash ${tmpPath}; rm -f ${tmpPath}`;
           const res = await ipcFetch("/exec", {
             method: "POST",
-            body: JSON.stringify({ command: writeCmd, timeout: data.timeout || 600 }),
+            body: JSON.stringify({ command: writeCmd, timeout_sec: data.timeout || 600 }),
           });
           const result = await res.json();
-          output = result.output || result.stdout || "";
+          const _stdout = result.stdout || "";
+          const _stderr = result.stderr || "";
+          output = [_stdout, _stderr].filter((s) => s.trim()).join("\n");
+          if (output) await sendToTerminal(`${output}\r\n`);
           if (!res.ok && !data.continue_on_error) {
             throw new Error(result.detail || result.error || `Script failed (${res.status})`);
           }
@@ -128,28 +160,36 @@ async function runWorkflow(
           const content = interpolate(data.content, vars);
           const path = interpolate(data.remote_path, vars);
           const sudoPrefix = data.sudo ? "sudo " : "";
-          // Use tee for sudo-capable file writes
+          commandText = `${sudoPrefix}tee ${path}`;
+          await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1m${commandText}\x1b[0m\r\n`);
           const cmd = `${sudoPrefix}tee ${path} > /dev/null << 'WFFILEEOF'\n${content}\nWFFILEEOF`;
           const res = await ipcFetch("/exec", {
             method: "POST",
-            body: JSON.stringify({ command: cmd, timeout: 30 }),
+            body: JSON.stringify({ command: cmd, timeout_sec: 30 }),
           });
           const result = await res.json();
-          output = result.output || result.stdout || `Written to ${path}`;
+          const _stdout = result.stdout || "";
+          const _stderr = result.stderr || "";
+          output = [_stdout, _stderr].filter((s) => s.trim()).join("\n") || `Written to ${path}`;
+          if (output) await sendToTerminal(`${output}\r\n`);
           if (!res.ok) throw new Error(result.detail || result.error || `File write failed (${res.status})`);
         } else if (node.type === "delay") {
           const data = node.data as DelayNodeData;
+          commandText = `sleep ${data.seconds}`;
+          await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1m${commandText}\x1b[0m\r\n`);
           await new Promise((r) => setTimeout(r, data.seconds * 1000));
           output = `Waited ${data.seconds}s`;
         } else if (node.type === "variable") {
           const data = node.data as { key: string; value: string; label: string };
           vars[data.key] = interpolate(data.value, vars);
+          commandText = `export ${data.key}="${vars[data.key]}"`;
           output = `Set ${data.key} = ${vars[data.key]}`;
+          await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1m${commandText}\x1b[0m\r\n`);
         }
 
         const idx = logs.findIndex((l) => l.node_id === node.id);
         if (idx >= 0) {
-          logs[idx] = { ...logs[idx], status: "success", completed_at: new Date().toISOString(), output };
+          logs[idx] = { ...logs[idx], status: "success", completed_at: new Date().toISOString(), output, command_text: commandText };
           await prisma.workflowExecution.update({ where: { id: execId }, data: { logs: JSON.stringify(logs) } });
         }
       } catch (err) {
@@ -159,6 +199,7 @@ async function runWorkflow(
           logs[idx] = { ...logs[idx], status: "failed", completed_at: new Date().toISOString(), error: errMsg };
           await prisma.workflowExecution.update({ where: { id: execId }, data: { logs: JSON.stringify(logs) } });
         }
+        await sendToTerminal(`\x1b[31m\u2717 ${errMsg}\x1b[0m\r\n`);
         await prisma.workflowExecution.update({
           where: { id: execId },
           data: { status: "failed", error: errMsg, completed_at: new Date(), logs: JSON.stringify(logs) },
@@ -171,6 +212,7 @@ async function runWorkflow(
       where: { id: execId },
       data: { status: "success", completed_at: new Date(), logs: JSON.stringify(logs) },
     });
+    await sendToTerminal(`\r\n\x1b[32m\u2501\u2501\u2501 Workflow complete \u2501\u2501\u2501\x1b[0m\r\n`);
   } catch (err) {
     await prisma.workflowExecution.update({
       where: { id: execId },

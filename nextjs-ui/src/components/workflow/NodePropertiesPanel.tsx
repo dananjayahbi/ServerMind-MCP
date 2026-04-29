@@ -1,5 +1,5 @@
 "use client";
-import type { WFNode, CommandNodeData, ScriptNodeData, FileWriteNodeData, VariableNodeData, DelayNodeData, NoteNodeData, TriggerNodeData } from "@/types/workflow";
+import type { WFNode, CommandNodeData, ScriptNodeData, FileWriteNodeData, VariableNodeData, DelayNodeData, NoteNodeData, TriggerNodeData, ValidationNodeData } from "@/types/workflow";
 
 interface Props {
   node: WFNode | null;
@@ -119,6 +119,32 @@ export function NodePropertiesPanel({ node, onChange }: Props) {
         <Field label="Note text">
           <textarea className={inputCls + " resize-none h-28"} value={(d.text as string) || ""} onChange={(e) => update({ text: e.target.value })} placeholder="Reminder: upload files before this step..." />
         </Field>
+      )}
+
+      {node.type === "validation" && (
+        <>
+          <Field label="Check Mode">
+            <select className={inputCls} value={(d.mode as string) || "contains"} onChange={(e) => update({ mode: e.target.value as "contains" | "regex" | "exit_code" })}>
+              <option value="contains">Contains text</option>
+              <option value="regex">Regex match</option>
+              <option value="exit_code">Exit code</option>
+            </select>
+          </Field>
+          <Field label="Expected value / pattern">
+            <input className={inputCls + " font-mono"} value={(d.expect as string) || ""} onChange={(e) => update({ expect: e.target.value })} placeholder={d.mode === "exit_code" ? "0" : "success|done"} />
+          </Field>
+          <Field label="On validation failure">
+            <select className={inputCls} value={(d.on_fail as string) || "pause"} onChange={(e) => update({ on_fail: e.target.value as "pause" | "stop" | "continue" })}>
+              <option value="pause">Pause and notify</option>
+              <option value="stop">Stop workflow</option>
+              <option value="continue">Continue anyway</option>
+            </select>
+          </Field>
+          <label className="flex items-center gap-2 text-sm text-[#A3A3A3] cursor-pointer">
+            <input type="checkbox" className={checkCls} checked={!!(d.continue_on_error)} onChange={(e) => update({ continue_on_error: e.target.checked })} />
+            Continue on error
+          </label>
+        </>
       )}
 
       <div className="text-[11px] text-[#333] mt-2">

@@ -6,8 +6,9 @@ import type { VariableNodeData } from "@/types/workflow";
 export function VariableNode({ data, selected }: NodeProps) {
   const d = data as unknown as VariableNodeData;
   return (
-    <div className={`min-w-[220px] max-w-[300px] rounded-xl border-2 transition-all ${selected ? "border-[#FB923C] shadow-[0_0_10px_#FB923C]" : "border-[#FB923C]/30"} bg-[#1A0E05] p-3`}>
-      <Handle type="target" position={Position.Top} className="!bg-[#FB923C] !border-[#0D0D0D] !w-3 !h-3" />
+    <div className={`min-w-[220px] max-w-[300px] rounded-xl border-2 transition-all ${selected ? "border-[#FB923C] shadow-[0_0_10px_#FB923C]" : "border-[#FB923C]/30"} bg-[#1A0E05] p-3 relative`}>
+      <Handle id="target" type="target" position={Position.Top} className="!bg-[#FB923C]/60 !border-[#0D0D0D] !w-3 !h-3" />
+      <Handle id="source" type="source" position={Position.Bottom} className="!bg-[#FB923C] !border-[#0D0D0D] !w-3 !h-3" />
       <div className="flex items-center gap-2 mb-2">
         <div className="w-7 h-7 rounded-lg bg-[#FB923C]/15 flex items-center justify-center flex-shrink-0">
           <Braces size={14} className="text-[#FB923C]" />
@@ -22,7 +23,6 @@ export function VariableNode({ data, selected }: NodeProps) {
         <span className="text-[#666]"> = </span>
         <span>{d.value || <span className="text-[#444]">empty</span>}</span>
       </div>
-      <Handle type="source" position={Position.Bottom} className="!bg-[#FB923C] !border-[#0D0D0D] !w-3 !h-3" />
     </div>
   );
 }

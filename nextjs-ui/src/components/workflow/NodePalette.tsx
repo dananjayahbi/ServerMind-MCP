@@ -1,5 +1,5 @@
 "use client";
-import { Zap, Terminal, Code2, FileCode2, Braces, Clock, StickyNote } from "lucide-react";
+import { Zap, Terminal, Code2, FileCode2, Braces, Clock, StickyNote, ShieldCheck } from "lucide-react";
 
 const NODE_TYPES = [
   {
@@ -16,6 +16,7 @@ const NODE_TYPES = [
     items: [
       { type: "variable", label: "Set Variable", desc: "Define/override a variable", icon: Braces, color: "#FB923C" },
       { type: "delay", label: "Delay", desc: "Pause execution", icon: Clock, color: "#94A3B8" },
+      { type: "validation", label: "Validation", desc: "Check output / exit code", icon: ShieldCheck, color: "#22C55E" },
       { type: "note", label: "Note", desc: "Annotation / comment", icon: StickyNote, color: "#FBBF24" },
     ],
   },

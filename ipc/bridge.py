@@ -20,6 +20,9 @@ from shared.constants import IPC_API_PREFIX, IPC_BIND_HOST
 
 logger = logging.getLogger(__name__)
 
+# Set of currently connected xterm.js WebSocket clients (for terminal injection)
+_terminal_ws_clients: set[WebSocket] = set()
+
 app = FastAPI(title="ServerMind MCP IPC Bridge", version="1.0.0", docs_url=None)
 
 # CORS is intentionally restrictive — loopback only
@@ -106,6 +109,7 @@ async def websocket_terminal_web(websocket: WebSocket) -> None:
         return
 
     await websocket.accept()
+    _terminal_ws_clients.add(websocket)
 
     from ssh.session_manager import get_manager as get_ssh_manager
     ssh_manager = get_ssh_manager()
@@ -113,6 +117,7 @@ async def websocket_terminal_web(websocket: WebSocket) -> None:
     if shell is None:
         await websocket.send_text("\r\nNo active SSH session. Connect a server first.\r\n")
         await websocket.close()
+        _terminal_ws_clients.discard(websocket)
         return
 
     loop = asyncio.get_running_loop()
@@ -125,13 +130,6 @@ async def websocket_terminal_web(websocket: WebSocket) -> None:
         )
 
     shell.add_output_callback(_on_chunk)
-
-    # The initial SSH banner + prompt may have already flowed through the shell's
-    # reader before this WS connected (callback was not yet registered).
-    # Send a blank line to trigger a fresh prompt so the user sees it immediately.
-    await asyncio.sleep(0.15)
-    if shell.is_open():
-        shell.send_input(b"\r\n")
 
     async def _shell_to_ws() -> None:
         try:
@@ -188,11 +186,25 @@ async def websocket_terminal_web(websocket: WebSocket) -> None:
             t.cancel()
     finally:
         shell.remove_output_callback(_on_chunk)
+        _terminal_ws_clients.discard(websocket)
 
 
-# ------------------------------------------------------------------
-# WebSocket endpoint
-# ------------------------------------------------------------------
+@app.post(f"{IPC_API_PREFIX}/session/terminal/inject")
+async def inject_terminal_output(request: Request) -> JSONResponse:
+    """Inject text directly into all connected xterm.js terminal clients."""
+    body = await request.json()
+    text = body.get("text", "")
+    if not text:
+        return JSONResponse({"ok": True, "clients": 0})
+    data = text.encode("utf-8", errors="replace")
+    dead: set[WebSocket] = set()
+    for ws in list(_terminal_ws_clients):
+        try:
+            await ws.send_bytes(data)
+        except Exception:
+            dead.add(ws)
+    _terminal_ws_clients.difference_update(dead)
+    return JSONResponse({"ok": True, "clients": len(_terminal_ws_clients)})
 
 @app.websocket("/ws/events")
 async def websocket_events(websocket: WebSocket) -> None:

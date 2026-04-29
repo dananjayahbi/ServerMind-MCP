@@ -89,6 +89,73 @@ function NodeLogRow({ log }: { log: WFNodeLog }) {
   );
 }
 
+function TerminalMirror({ execution, prompt }: { execution: WorkflowExecution | null; prompt: string }) {
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [execution?.logs.length, execution?.status]);
+
+  return (
+    <div className="flex flex-col h-full rounded-xl border border-[#2A2A2A] bg-[#0D0D0D] overflow-hidden">
+      {/* macOS-style terminal header */}
+      <div className="flex items-center gap-2 px-3 py-2 bg-[#111111] border-b border-[#2A2A2A] flex-shrink-0">
+        <div className="flex gap-1.5">
+          <div className="w-2.5 h-2.5 rounded-full bg-[#EF4444]/60" />
+          <div className="w-2.5 h-2.5 rounded-full bg-[#F59E0B]/60" />
+          <div className="w-2.5 h-2.5 rounded-full bg-[#10B981]/60" />
+        </div>
+        <span className="text-[11px] text-[#444] font-mono ml-1 truncate">{prompt}</span>
+      </div>
+      {/* Terminal body */}
+      <div className="flex-1 overflow-y-auto p-3 font-mono text-[11px] leading-relaxed">
+        {!execution ? (
+          <span className="text-[#333]">Run the workflow to see terminal output...</span>
+        ) : (
+          <>
+            <div className="text-[#49C5B6]">{`\u2501\u2501\u2501 Workflow: ${execution.id.slice(0, 12)} \u2501\u2501\u2501`}</div>
+            <div className="text-[#555] mb-2">{`Started: ${new Date(execution.started_at).toLocaleTimeString()}`}</div>
+            {execution.logs.map((log) => (
+              <div key={log.node_id} className="mb-1.5">
+                {/* Prompt + command line */}
+                {log.command_text ? (
+                  <div className="flex flex-wrap">
+                    <span className="text-[#22C55E] font-bold mr-1">{prompt}</span>
+                    <span className="text-[#F2F2F2] break-all">{log.command_text}</span>
+                  </div>
+                ) : log.status === "running" ? (
+                  <div>
+                    <span className="text-[#F59E0B] font-bold mr-1">{prompt}</span>
+                    <span className="text-[#F59E0B] animate-pulse">\u258c</span>
+                  </div>
+                ) : null}
+                {/* stdout */}
+                {log.output && (
+                  <pre className="text-[#A3A3A3] whitespace-pre-wrap break-all m-0">{log.output}</pre>
+                )}
+                {/* stderr / error */}
+                {log.error && (
+                  <pre className="text-[#EF4444] whitespace-pre-wrap break-all m-0">{log.error}</pre>
+                )}
+              </div>
+            ))}
+            {execution.status === "success" && (
+              <div className="text-[#10B981] mt-1">{`\u2501\u2501\u2501 Workflow complete \u2501\u2501\u2501`}</div>
+            )}
+            {execution.status === "failed" && (
+              <div className="text-[#EF4444] mt-1">{`\u2501\u2501\u2501 Workflow failed \u2501\u2501\u2501`}</div>
+            )}
+            {execution.status === "running" && (
+              <div className="text-[#49C5B6] animate-pulse mt-1">{`\u25cf Running...`}</div>
+            )}
+          </>
+        )}
+        <div ref={bottomRef} />
+      </div>
+    </div>
+  );
+}
+
 export default function WorkflowRunPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -101,6 +168,9 @@ export default function WorkflowRunPage() {
   const [running, setRunning] = useState(false);
   const [execId, setExecId] = useState<string | null>(null);
   const [execution, setExecution] = useState<WorkflowExecution | null>(null);
+
+  const selectedProfile = profiles.find((p) => p.id === profileId);
+  const termPrompt = selectedProfile ? `${selectedProfile.username}@${selectedProfile.hostname}:~$` : "server:~$";
   const [pastExecutions, setPastExecutions] = useState<WorkflowExecution[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -331,8 +401,10 @@ export default function WorkflowRunPage() {
           </div>
         </div>
 
-        {/* Right: execution log or history */}
-        <div className="flex-1 overflow-y-auto bg-[#0D0D0D] p-4">
+        {/* Right: execution log + terminal mirror */}
+        <div className="flex-1 flex overflow-hidden bg-[#0D0D0D]">
+          {/* Execution log - 60% */}
+          <div className="flex-1 overflow-y-auto p-4 min-w-0">
           {showHistory ? (
             <div className="space-y-3 max-w-2xl">
               <p className="text-[11px] uppercase tracking-widest text-[#49C5B6] font-semibold mb-3">Execution History</p>
@@ -406,6 +478,11 @@ export default function WorkflowRunPage() {
               <p className="text-[12px] text-[#444] mt-1">Configure variables and click Run Workflow</p>
             </div>
           )}
+          </div>
+          {/* Terminal mirror - 40% */}
+          <div className="w-[480px] flex-shrink-0 border-l border-[#2A2A2A] p-3 flex flex-col overflow-hidden">
+            <TerminalMirror execution={!showHistory ? execution : null} prompt={termPrompt} />
+          </div>
         </div>
       </div>
     </div>

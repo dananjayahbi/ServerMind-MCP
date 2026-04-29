@@ -8,7 +8,8 @@ export type WFNodeType =
   | "variable"
   | "condition"
   | "delay"
-  | "note";
+  | "note"
+  | "validation";
 
 // ── Variable definition (schema-time) ─────────────────────────────────────────
 export interface WFVariableDef {
@@ -68,6 +69,15 @@ export interface NoteNodeData {
   text: string;
 }
 
+export interface ValidationNodeData {
+  label: string;
+  pattern: string;
+  mode: "contains" | "regex" | "exit_code";
+  expect: string;
+  on_fail: "pause" | "stop" | "continue";
+  continue_on_error?: boolean;
+}
+
 export type WFNodeData =
   | TriggerNodeData
   | CommandNodeData
@@ -76,7 +86,8 @@ export type WFNodeData =
   | VariableNodeData
   | ConditionNodeData
   | DelayNodeData
-  | NoteNodeData;
+  | NoteNodeData
+  | ValidationNodeData;
 
 // ── Generic node ───────────────────────────────────────────────────────────────
 export interface WFNode {
@@ -94,6 +105,7 @@ export interface WFEdge {
   sourceHandle?: string | null;
   targetHandle?: string | null;
   label?: string;
+  loop_config?: { iterations: number };
 }
 
 // ── Full workflow ──────────────────────────────────────────────────────────────
@@ -130,6 +142,7 @@ export interface WFNodeLog {
   completed_at?: string;
   output?: string;
   error?: string;
+  command_text?: string; // actual command/script/operation that ran
 }
 
 export interface WorkflowExecution {

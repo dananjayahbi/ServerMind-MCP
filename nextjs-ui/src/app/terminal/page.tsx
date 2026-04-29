@@ -4,6 +4,14 @@ import { useAppStore } from "@/lib/store";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Terminal as TerminalIcon, Trash2, RefreshCw, Wifi, WifiOff, Copy, Check } from "lucide-react";
 
+// Module-level terminal output buffer — survives component unmount/remount
+const _termBuffer: (Uint8Array | string)[] = [];
+const _MAX_BUFFER = 3000;
+function _bufferWrite(chunk: Uint8Array | string) {
+  _termBuffer.push(chunk);
+  if (_termBuffer.length > _MAX_BUFFER) _termBuffer.shift();
+}
+
 type WsState = "connecting" | "open" | "closed" | "error";
 
 const selectSession = (s: ReturnType<typeof useAppStore.getState>) => s.session;
@@ -58,6 +66,10 @@ export default function TerminalPage() {
       if (termContainerRef.current) {
         term.open(termContainerRef.current);
         fit.fit();
+        // Replay buffered output so terminal shows content after navigation
+        for (const chunk of _termBuffer) {
+          term.write(chunk as string);
+        }
       }
     }
 
@@ -127,8 +139,9 @@ export default function TerminalPage() {
       if (e.data instanceof ArrayBuffer) {
         const buf = new Uint8Array(e.data);
         const filtered = buf.filter((b) => b !== 0);
-        if (filtered.length > 0) term.write(filtered);
+        if (filtered.length > 0) { _bufferWrite(filtered); term.write(filtered); }
       } else if (typeof e.data === "string" && e.data !== "\x00") {
+        _bufferWrite(e.data);
         term.write(e.data);
       }
     };
@@ -168,7 +181,7 @@ export default function TerminalPage() {
     };
   }, []);
 
-  function clearTerminal() { xtermRef.current?.clear(); }
+  function clearTerminal() { xtermRef.current?.clear(); _termBuffer.length = 0; }
   function reconnect() { if (ipcToken && ipcPort) openWs(ipcToken, ipcPort); }
 
   function copyTerminal() {

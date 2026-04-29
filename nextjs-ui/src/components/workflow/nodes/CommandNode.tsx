@@ -6,8 +6,13 @@ import type { CommandNodeData } from "@/types/workflow";
 export function CommandNode({ data, selected }: NodeProps) {
   const d = data as unknown as CommandNodeData;
   return (
-    <div className={`min-w-[240px] max-w-[320px] rounded-xl border-2 transition-all ${selected ? "border-[#F59E0B] shadow-[0_0_10px_#F59E0B]" : "border-[#F59E0B]/30"} bg-[#1A1A0D] p-3`}>
-      <Handle type="target" position={Position.Top} className="!bg-[#F59E0B] !border-[#0D0D0D] !w-3 !h-3" />
+    <div className={`min-w-[240px] max-w-[320px] rounded-xl border-2 transition-all ${selected ? "border-[#F59E0B] shadow-[0_0_10px_#F59E0B]" : "border-[#F59E0B]/30"} bg-[#1A1A0D] p-3 relative`}>
+      {/* Two inputs at top */}
+      <Handle id="target-a" type="target" position={Position.Top} style={{ left: '30%' }} className="!bg-[#F59E0B]/60 !border-[#0D0D0D] !w-3 !h-3" />
+      <Handle id="target-b" type="target" position={Position.Top} style={{ left: '70%' }} className="!bg-[#F59E0B]/60 !border-[#0D0D0D] !w-3 !h-3" />
+      {/* Two outputs at bottom */}
+      <Handle id="source-a" type="source" position={Position.Bottom} style={{ left: '30%' }} className="!bg-[#F59E0B] !border-[#0D0D0D] !w-3 !h-3" />
+      <Handle id="source-b" type="source" position={Position.Bottom} style={{ left: '70%' }} className="!bg-[#F59E0B] !border-[#0D0D0D] !w-3 !h-3" />
       <div className="flex items-center gap-2 mb-2">
         <div className="w-7 h-7 rounded-lg bg-[#F59E0B]/15 flex items-center justify-center flex-shrink-0">
           <Terminal size={14} className="text-[#F59E0B]" />
@@ -25,7 +30,6 @@ export function CommandNode({ data, selected }: NodeProps) {
           continue on error
         </span>
       )}
-      <Handle type="source" position={Position.Bottom} className="!bg-[#F59E0B] !border-[#0D0D0D] !w-3 !h-3" />
     </div>
   );
 }

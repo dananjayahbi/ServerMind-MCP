@@ -6,8 +6,9 @@ import type { FileWriteNodeData } from "@/types/workflow";
 export function FileWriteNode({ data, selected }: NodeProps) {
   const d = data as unknown as FileWriteNodeData;
   return (
-    <div className={`min-w-[240px] max-w-[320px] rounded-xl border-2 transition-all ${selected ? "border-[#60A5FA] shadow-[0_0_10px_#60A5FA]" : "border-[#60A5FA]/30"} bg-[#0D1220] p-3`}>
-      <Handle type="target" position={Position.Top} className="!bg-[#60A5FA] !border-[#0D0D0D] !w-3 !h-3" />
+    <div className={`min-w-[240px] max-w-[320px] rounded-xl border-2 transition-all ${selected ? "border-[#60A5FA] shadow-[0_0_10px_#60A5FA]" : "border-[#60A5FA]/30"} bg-[#0D1220] p-3 relative`}>
+      <Handle id="target" type="target" position={Position.Top} className="!bg-[#60A5FA]/60 !border-[#0D0D0D] !w-3 !h-3" />
+      <Handle id="source" type="source" position={Position.Bottom} className="!bg-[#60A5FA] !border-[#0D0D0D] !w-3 !h-3" />
       <div className="flex items-center gap-2 mb-2">
         <div className="w-7 h-7 rounded-lg bg-[#60A5FA]/15 flex items-center justify-center flex-shrink-0">
           <FileCode2 size={14} className="text-[#60A5FA]" />
@@ -25,7 +26,6 @@ export function FileWriteNode({ data, selected }: NodeProps) {
           sudo
         </span>
       )}
-      <Handle type="source" position={Position.Bottom} className="!bg-[#60A5FA] !border-[#0D0D0D] !w-3 !h-3" />
     </div>
   );
 }
