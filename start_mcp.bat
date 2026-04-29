@@ -1,8 +1,8 @@
 @echo off
 :: start_mcp.bat
 :: Launch the ServerMind MCP backend server.
-:: The backend also serves the Web UI at: http://127.0.0.1:17432/ui/
-:: The MCP SSE endpoint is available at:   http://127.0.0.1:17433/sse
+:: The MCP SSE endpoint is available at: http://127.0.0.1:17433/sse
+:: The Next.js UI is available at:       http://localhost:17435
 ::
 :: Requirements:
 ::   - Python 3.11+ on PATH
@@ -13,13 +13,10 @@ echo ============================================================
 echo  ServerMind MCP
 echo ============================================================
 echo  Starting backend...
-echo  Web UI will be available at:  http://127.0.0.1:17432/ui/
-echo  MCP SSE endpoint available at: http://127.0.0.1:17433/sse
+echo  MCP SSE endpoint: http://127.0.0.1:17433/sse
+echo  Next.js UI:       http://localhost:17435
 echo  Press Ctrl+C to stop.
 echo.
-
-:: Open browser after a short delay (3 seconds for backend to start)
-start "" /min cmd /c "timeout /t 3 /nobreak >nul && start http://127.0.0.1:17432/ui/"
 
 python -m mcp_server --transport sse %*
 if %ERRORLEVEL% neq 0 (

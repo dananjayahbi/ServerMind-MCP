@@ -1,0 +1,55 @@
+// Prisma schema for ServerMind UI local cache
+// Syncs from MCP JSON cache on startup
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./servermind.db"
+}
+
+// Cached server profiles (synced from MCP config)
+model CachedProfile {
+  id                            String   @id
+  display_name                  String
+  hostname                      String
+  port                          Int      @default(22)
+  username                      String
+  ppk_file_path                 String?
+  auth_method                   String   @default("ppk")
+  notes                         String?
+  keepalive_transport_interval  Int      @default(30)
+  keepalive_app_interval        Int      @default(60)
+  connection_timeout            Int      @default(30)
+  max_reconnect_attempts        Int?
+  reconnect_base_delay          Int      @default(5)
+  created_at                    String
+  updated_at                    String
+  synced_at                     DateTime @default(now())
+}
+
+// Cached session state snapshots
+model SessionSnapshot {
+  id                    Int      @id @default(autoincrement())
+  session_uuid          String?
+  profile_id            String?
+  state                 String
+  connected_at          String?
+  last_keepalive_at     String?
+  commands_executed     Int      @default(0)
+  recorded_at           DateTime @default(now())
+}
+
+// Cached app settings
+model CachedSettings {
+  id                        Int    @id @default(1)
+  ipc_port                  Int    @default(17432)
+  ui_theme                  String @default("dark")
+  log_buffer_size           Int    @default(5000)
+  log_max_file_size_mb      Int    @default(10)
+  log_backup_count          Int    @default(5)
+  default_command_timeout   Int    @default(300)
+  synced_at                 DateTime @default(now())
+}

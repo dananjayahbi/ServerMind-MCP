@@ -126,6 +126,16 @@ class ShellChannel:
         with self._lock:
             self._channel.sendall(data)
 
+    def resize(self, cols: int, rows: int) -> None:
+        """Resize the PTY window (propagated to the remote shell via SIGWINCH)."""
+        if not self.is_open():
+            return
+        with self._lock:
+            try:
+                self._channel.resize_pty(width=max(1, cols), height=max(1, rows))
+            except Exception:
+                pass
+
     def _start_reader(self) -> None:
         """Start the background reader thread that streams output chunks via callback."""
         if self._reader_running:
@@ -148,19 +158,25 @@ class ShellChannel:
                     break
                 if ch.recv_ready():
                     data = ch.recv(SHELL_OUTPUT_BUFFER_SIZE)
-                    if data:
-                        chunk = data.decode("utf-8", errors="replace")
-                        with self._cb_lock:
-                            cbs = list(self._output_callbacks)
-                        for cb in cbs:
-                            try:
-                                cb("shell", chunk, "stdout")
-                            except Exception:
-                                logger.exception("Error in shell output callback")
+                    if not data:
+                        # Remote side closed the channel
+                        break
+                    chunk = data.decode("utf-8", errors="replace")
+                    with self._cb_lock:
+                        cbs = list(self._output_callbacks)
+                    for cb in cbs:
+                        try:
+                            cb("shell", chunk, "stdout")
+                        except Exception:
+                            logger.exception("Error in shell output callback")
                 else:
                     time.sleep(0.02)
-            except Exception:
+            except OSError:
+                # Channel closed by remote — exit cleanly
                 break
+            except Exception:
+                logger.debug("Shell reader non-fatal exception, continuing", exc_info=True)
+                time.sleep(0.05)
         self._reader_running = False
         logger.debug("Shell reader thread stopped")
 

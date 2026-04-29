@@ -60,11 +60,21 @@ def establish_connection(
 
     client.set_missing_host_key_policy(HostKeyPolicy(known_hosts))
 
-    # Load PPK key
-    try:
-        pkey = PPKHandler.load(profile.ppk_file_path, passphrase=passphrase)
-    except PPKLoadError:
-        raise
+    # Determine authentication method
+    pkey = None
+    password = None
+
+    if profile.auth_method == "ppk":
+        if not profile.ppk_file_path:
+            from shared.exceptions import PPKLoadError as _PPKLoadError
+            raise _PPKLoadError("PPK auth method selected but no ppk_file_path is configured.")
+        try:
+            pkey = PPKHandler.load(profile.ppk_file_path, passphrase=passphrase)
+        except PPKLoadError:
+            raise
+    else:
+        # password auth
+        password = profile.password or None
 
     # Connect
     try:
@@ -73,6 +83,7 @@ def establish_connection(
             port=profile.port,
             username=profile.username,
             pkey=pkey,
+            password=password,
             timeout=profile.connection_timeout_sec,
             allow_agent=False,
             look_for_keys=False,

@@ -13,8 +13,8 @@ from fastapi.responses import JSONResponse
 from ipc.auth import validate_token
 from ipc.event_bus import get_async_queue, set_async_queue, set_running_loop
 from ipc.routes import health, logs, profiles, session, settings, terminal
-from ipc.routes import webui_routes
 from ipc.routes import tunnel
+from ipc.routes import exec as exec_route
 from ipc.websocket import get_ws_manager
 from shared.constants import IPC_API_PREFIX, IPC_BIND_HOST
 
@@ -30,6 +30,8 @@ app.add_middleware(
         "http://localhost",
         "http://127.0.0.1:17432",
         "http://localhost:17432",
+        "http://127.0.0.1:17435",
+        "http://localhost:17435",
     ],
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Authorization", "Content-Type", "X-IPC-Token"],
@@ -42,8 +44,6 @@ app.add_middleware(
 
 UNAUTHENTICATED_PATHS = {
     f"{IPC_API_PREFIX}/health",
-    "/ui",
-    "/ui/",
 }
 
 
@@ -76,7 +76,7 @@ app.include_router(logs.router, prefix=IPC_API_PREFIX)
 app.include_router(terminal.router, prefix=IPC_API_PREFIX)
 app.include_router(settings.router, prefix=IPC_API_PREFIX)
 app.include_router(tunnel.router, prefix=IPC_API_PREFIX)
-app.include_router(webui_routes.router)
+app.include_router(exec_route.router, prefix=IPC_API_PREFIX)
 
 
 # ------------------------------------------------------------------
@@ -144,6 +144,7 @@ async def websocket_terminal_web(websocket: WebSocket) -> None:
     async def _ws_to_shell() -> None:
         # xterm.js sends TEXT frames (onData returns strings); handle both
         # text and binary so the WS never unexpectedly closes on input.
+        # Special JSON control frames (e.g. resize) are handled here too.
         try:
             while True:
                 raw = await websocket.receive()
@@ -154,9 +155,23 @@ async def websocket_terminal_web(websocket: WebSocket) -> None:
                 if raw.get("bytes"):
                     data = raw["bytes"]
                 elif raw.get("text"):
-                    data = raw["text"].encode("utf-8")
+                    text = raw["text"]
+                    # Check for JSON control frame (resize, etc.)
+                    if text.startswith("{"):
+                        try:
+                            import json as _json
+                            ctrl = _json.loads(text)
+                            if ctrl.get("type") == "resize":
+                                shell.resize(int(ctrl.get("cols", 80)), int(ctrl.get("rows", 24)))
+                        except Exception:
+                            pass
+                        continue
+                    data = text.encode("utf-8")
                 if data and shell.is_open():
-                    shell.send_input(data)
+                    # Strip null keepalive bytes sent by the frontend
+                    data = data.replace(b"\x00", b"")
+                    if data:
+                        shell.send_input(data)
         except WebSocketDisconnect:
             pass
         except Exception:

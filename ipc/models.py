@@ -20,11 +20,11 @@ class CreateProfileRequest(BaseModel):
     hostname: str
     port: int = 22
     username: str
-    ppk_file_path: str = ""
+    ppk_file_path: str | None = None
     auth_method: str = "password"
-    password: str = ""
-    sudo_password: str = ""
-    notes: str = ""
+    password: str | None = None
+    sudo_password: str | None = None
+    notes: str | None = None
     keepalive_transport_interval_sec: int = 60
     keepalive_app_interval_sec: int = 120
     connection_timeout_sec: int = 30

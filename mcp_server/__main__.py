@@ -99,11 +99,17 @@ def main() -> None:
 
     audit_log.add_emit_callback(_on_log_entry)
 
-    # 7. Wire session state changes -> IPC event bus
+    # 7. Wire session state changes -> IPC event bus + JSON cache
     from ssh.session_manager import add_state_change_callback, get_manager as get_ssh_manager
+    from ipc.cache_writer import refresh_profiles_cache, refresh_session_cache, refresh_settings_cache
+
+    # Write initial cache on startup
+    refresh_profiles_cache()
+    refresh_settings_cache()
 
     def _on_state_change(state_model) -> None:
         publish_sync(WSEventType.SESSION_STATE_CHANGED, state_model.to_dict())
+        refresh_session_cache(state_model.to_dict())
 
     add_state_change_callback(_on_state_change)
 

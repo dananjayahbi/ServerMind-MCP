@@ -1,0 +1,12 @@
+/nextjs-ui/node_modules/
+/nextjs-ui/.next/
+/nextjs-ui/dist/
+/nextjs-ui/build/
+/nextjs-ui/.env
+/nextjs-ui/.env.local
+/nextjs-ui/.env.development
+/nextjs-ui/.env.production
+/nextjs-ui/.env.test
+/nextjs-ui/.DS_Store
+/nextjs-ui/.vscode/
+/nextjs-ui/prisma/servermind.db

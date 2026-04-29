@@ -42,11 +42,11 @@ async def create_profile(req: CreateProfileRequest) -> ProfileResponse:
         hostname=req.hostname,
         port=req.port,
         username=req.username,
-        ppk_file_path=req.ppk_file_path,
+        ppk_file_path=req.ppk_file_path or "",
         auth_method=req.auth_method,
-        password=req.password,
-        sudo_password=req.sudo_password,
-        notes=req.notes,
+        password=req.password or "",
+        sudo_password=req.sudo_password or "",
+        notes=req.notes or "",
         keepalive_transport_interval_sec=req.keepalive_transport_interval_sec,
         keepalive_app_interval_sec=req.keepalive_app_interval_sec,
         connection_timeout_sec=req.connection_timeout_sec,
@@ -54,6 +54,8 @@ async def create_profile(req: CreateProfileRequest) -> ProfileResponse:
         reconnect_base_delay_sec=req.reconnect_base_delay_sec,
     )
     created = get_engine().create_profile(profile)
+    from ipc.cache_writer import refresh_profiles_cache
+    refresh_profiles_cache()
     return ProfileResponse(**created.to_dict())
 
 
@@ -72,6 +74,8 @@ async def update_profile(profile_id: str, req: UpdateProfileRequest) -> ProfileR
             setattr(existing, key, value)
 
     updated = engine.update_profile(existing)
+    from ipc.cache_writer import refresh_profiles_cache
+    refresh_profiles_cache()
     return ProfileResponse(**updated.to_dict())
 
 
@@ -85,3 +89,5 @@ async def delete_profile(profile_id: str) -> None:
         raise HTTPException(
             status_code=409, detail="Cannot delete a profile with an active session"
         )
+    from ipc.cache_writer import refresh_profiles_cache
+    refresh_profiles_cache()
