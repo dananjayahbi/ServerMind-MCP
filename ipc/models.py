@@ -23,6 +23,7 @@ class CreateProfileRequest(BaseModel):
     ppk_file_path: str = ""
     auth_method: str = "password"
     password: str = ""
+    sudo_password: str = ""
     notes: str = ""
     keepalive_transport_interval_sec: int = 60
     keepalive_app_interval_sec: int = 120
@@ -39,6 +40,7 @@ class UpdateProfileRequest(BaseModel):
     ppk_file_path: str | None = None
     auth_method: str | None = None
     password: str | None = None
+    sudo_password: str | None = None
     notes: str | None = None
     keepalive_transport_interval_sec: int | None = None
     keepalive_app_interval_sec: int | None = None
@@ -71,6 +73,9 @@ class ProfileResponse(BaseModel):
     port: int
     username: str
     ppk_file_path: str
+    auth_method: str = "password"
+    password: str = ""
+    sudo_password: str = ""
     keepalive_transport_interval_sec: int
     keepalive_app_interval_sec: int
     connection_timeout_sec: int

@@ -43,6 +43,7 @@ class Actor:
 class ExecMode:
     EXEC = "EXEC"
     SHELL = "SHELL"
+    SCRIPT = "SCRIPT"
 
 # Command result statuses
 class CommandStatus:

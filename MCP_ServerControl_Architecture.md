@@ -20,9 +20,8 @@
    - 5.4 [Configuration Engine](#54-configuration-engine)
    - 5.5 [Command Execution Pipeline](#55-command-execution-pipeline)
    - 5.6 [Audit & Logging Subsystem](#56-audit--logging-subsystem)
-   - 5.7 [CustomTkinter GUI Application](#57-customtkinter-gui-application)
 6. [Data Models](#6-data-models)
-7. [IPC Contract: MCP ↔ GUI](#7-ipc-contract-mcp--gui)
+7. [IPC Contract](#7-ipc-contract)
 8. [MCP Tool Catalogue](#8-mcp-tool-catalogue)
 9. [Session Lifecycle & Persistence](#9-session-lifecycle--persistence)
 10. [Authentication & Key Management](#10-authentication--key-management)
@@ -41,13 +40,9 @@
 
 ## 1. Executive Summary
 
-ServerMind MCP is a dual-surface infrastructure control system consisting of two tightly coupled but independently operable components: an **MCP-compliant backend server** and a **desktop GUI application** built with CustomTkinter.
+ServerMind MCP is an MCP-compliant backend server that exposes remote SSH infrastructure to AI coding agents.
 
 The MCP backend exposes a defined set of tools consumable by AI coding agents (Claude Code, GitHub Copilot via VS Code, and any other MCP-compatible client). These tools allow agents to list configured servers, expose a selected server into an active SSH session, execute commands on the remote host, read session output, and cleanly terminate connections.
-
-The GUI application serves as the operator control plane. It allows a human operator to define and persist any number of server profiles — each specifying hostname, port, authentication key (.ppk file path), username, and operational metadata. When the operator chooses to expose a server, exactly one server may be active at a time. Both the human operator and an AI agent share control over the same live session, with all actions uniformly logged.
-
-The two surfaces communicate over a local IPC bridge comprising a REST API and a WebSocket channel. This bridge is internal-only — it binds exclusively to the loopback interface and is not exposed to any external network interface.
 
 ---
 
@@ -59,24 +54,18 @@ AI coding agents operate in sandboxed environments and have no native mechanism 
 
 ### 2.2 Solution Summary
 
-ServerMind MCP solves this by acting as an authenticated, persistent SSH proxy. The MCP server maintains live SSH sessions on behalf of the operator and AI agent, converts standard MCP tool calls into SSH commands, and returns structured output back to the caller. A companion GUI provides the human operator full visibility and manual control over all sessions and configurations.
+ServerMind MCP solves this by acting as an authenticated, persistent SSH proxy. The MCP server maintains live SSH sessions on behalf of the operator and AI agent, converts standard MCP tool calls into SSH commands, and returns structured output back to the caller.
 
 ### 2.3 Primary User Journeys
 
-**Journey 1 — Operator Configures a Server:**
-The operator opens the GUI, navigates to the Server Configuration panel, fills in server details and selects a .ppk key file from disk, saves the profile, and the profile persists across restarts.
+**Journey 1 — Operator Exposes a Server:**
+The operator selects one saved profile via the IPC API or MCP tools and the system initiates an SSH connection. Keep-alive signals are immediately armed.
 
-**Journey 2 — Operator Exposes a Server:**
-The operator selects one saved profile from the exposure selector, clicks "Expose Server," and the system initiates an SSH connection. The connection's status is displayed in real time in the GUI. Keep-alive signals are immediately armed.
+**Journey 2 — AI Agent Controls the Exposed Server:**
+An AI agent calls the MCP tool `server_execute_command` with a shell command string. The MCP server routes the command through the live SSH session, captures stdout/stderr, and returns the structured result to the agent.
 
-**Journey 3 — AI Agent Controls the Exposed Server:**
-An AI agent calls the MCP tool `server_execute_command` with a shell command string. The MCP server routes the command through the live SSH session, captures stdout/stderr, and returns the structured result to the agent. The GUI logs the transaction.
-
-**Journey 4 — Operator Views Activity:**
-The operator watches the scrollable log panel in the GUI, which shows timestamped records of every command executed, its source (agent or operator), its result status, and a truncated preview of the output.
-
-**Journey 5 — Session Termination:**
-Termination is only possible via three explicit actions: the operator clicking the "Disconnect" button in the GUI, an AI agent calling the `server_disconnect` MCP tool, or the operator closing the GUI application entirely. Inactivity alone never terminates a session.
+**Journey 3 — Session Termination:**
+Termination is only possible via two explicit actions: an AI agent calling the `server_disconnect` MCP tool, or via the IPC REST API. Inactivity alone never terminates a session.
 
 ---
 
@@ -84,11 +73,11 @@ Termination is only possible via three explicit actions: the operator clicking t
 
 ### 3.1 Strict Separation of Concerns
 
-Each major subsystem is responsible for exactly one domain. The SSH Session Manager knows nothing about the GUI. The GUI knows nothing about the SSH protocol. The IPC bridge is the only shared boundary, and its contract is formally defined.
+Each major subsystem is responsible for exactly one domain. The SSH Session Manager knows nothing about the IPC layer. The IPC bridge is the only shared boundary, and its contract is formally defined.
 
 ### 3.2 Single Active Session Constraint
 
-At any point in time, only one server session may be in the "exposed" state. This is a hard constraint enforced at both the MCP layer and the GUI layer independently. Multiple profiles may be saved, but the exposure selector enforces single selection.
+At any point in time, only one server session may be in the "exposed" state. This is a hard constraint enforced at the MCP layer. Multiple profiles may be saved, but only one may be in the exposed state.
 
 ### 3.3 No Implicit Termination
 
@@ -96,7 +85,7 @@ Session termination must be an explicit, deliberate act. The system shall never 
 
 ### 3.4 Human Operator Supremacy
 
-The human operator always has override capability. An AI agent cannot perform any action that the GUI does not also surface and log. Operator manual commands always take precedence if issued concurrently.
+Operator actions submitted via the IPC API always take precedence if issued concurrently with an AI agent command.
 
 ### 3.5 Minimal External Footprint
 
@@ -131,18 +120,18 @@ Every command, every connection event, every configuration change, and every IPC
 │   - Connection Pool    │        │   - REST API (FastAPI)    │
 │   - Keep-Alive Engine  │        │   - WebSocket Dispatcher  │
 │   - PPK Auth Handler   │        │   - Event Bus             │
-│   - Reconnect Policy   │        └──────────┬───────────────┘
-└────────────┬───────────┘                   │
-             │                               │ Socket
-             │ Shared session state           ▼
-             ▼                  ┌──────────────────────────────┐
-┌────────────────────────┐      │   CustomTkinter GUI App      │
-│  Command Exec Pipeline │      │   - Dashboard View           │
-│  - Command Queue       │      │   - Server Config Panel      │
-│  - Output Capture      │      │   - Log Viewer Panel         │
-│  - Result Formatter    │      │   - Exposure Control Panel   │
-└────────────┬───────────┘      │   - Manual Terminal Panel    │
-             │                  └──────────────────────────────┘
+│   - Reconnect Policy   │        └──────────────────────────┘
+└────────────┬───────────┘
+             │
+             │ Shared session state
+             ▼
+┌────────────────────────┐
+│  Command Exec Pipeline │
+│  - Command Queue       │
+│  - Output Capture      │
+│  - Result Formatter    │
+└────────────┬───────────┘
+             │
              ▼
 ┌────────────────────────┐
 │  Audit & Logging       │
@@ -193,7 +182,7 @@ All tool responses follow the MCP content block format. Text results are wrapped
 
 #### 5.1.6 Server Lifecycle
 
-The MCP server starts as a separate process, independent of the GUI. It reads its IPC endpoint addresses from the configuration file on startup and connects to the IPC bridge. If the IPC bridge is not yet available (e.g., the GUI has not been launched), the MCP server queues its IPC registration and retries with exponential backoff. Tool calls that require an active session will return a structured "no active session" error while the IPC bridge is unavailable.
+The MCP server starts as a separate process. It reads its IPC endpoint addresses from the configuration file on startup and connects to the IPC bridge. If the IPC bridge is not yet available, the MCP server queues its IPC registration and retries with exponential backoff. Tool calls that require an active session will return a structured "no active session" error while the IPC bridge is unavailable.
 
 ---
 
@@ -242,7 +231,7 @@ If a session drops unexpectedly (network interruption, server restart, etc.) and
 3. Subsequent attempts use exponential backoff with jitter, up to a configurable maximum interval (default: 120 seconds).
 4. If a maximum attempt count is configured and exhausted, the session transitions to `FAULT`.
 5. If no maximum is configured, reconnection attempts continue indefinitely until the session is manually terminated or a successful reconnection occurs.
-6. Every attempt, success, and failure is logged and pushed to the GUI via the IPC bridge.
+6. Every attempt, success, and failure is logged and pushed to connected clients via the IPC bridge.
 
 ---
 
@@ -250,11 +239,11 @@ If a session drops unexpectedly (network interruption, server restart, etc.) and
 
 #### 5.3.1 Responsibility
 
-The IPC Bridge Layer is the internal communication backbone between the MCP backend process and the GUI process. It provides a REST API for request-response interactions and a WebSocket channel for event streaming.
+The IPC Bridge Layer is the internal communication backbone of the MCP backend process. It provides a REST API for request-response interactions and a WebSocket channel for event streaming to connected clients.
 
 #### 5.3.2 Technology Choice
 
-The bridge is implemented using FastAPI running inside the MCP backend process. The GUI application connects to it as a client. The bridge binds exclusively to `127.0.0.1` on a configurable port (default: 17432). The port number must not conflict with well-known services and is configurable to support environments where that port is occupied.
+The bridge is implemented using FastAPI running inside the MCP backend process. Clients connect to it over the loopback interface. The bridge binds exclusively to `127.0.0.1` on a configurable port (default: 17432). The port number must not conflict with well-known services and is configurable to support environments where that port is occupied.
 
 #### 5.3.3 REST API Surface
 
@@ -262,15 +251,15 @@ The REST API exposes endpoints for actions that are request-response in nature: 
 
 #### 5.3.4 WebSocket Event Channel
 
-The WebSocket channel is a unidirectional stream from the backend to the GUI. The GUI subscribes to this channel on startup and uses it to receive real-time events: log entries as they are generated, session state transitions, command results arriving asynchronously, and keep-alive heartbeat acknowledgements. The GUI never sends data back over the WebSocket; all GUI-initiated actions use the REST API.
+The WebSocket channel is a unidirectional stream from the backend to clients. Clients subscribe to this channel on startup and use it to receive real-time events: log entries as they are generated, session state transitions, command results arriving asynchronously, and keep-alive heartbeat acknowledgements. All client-initiated actions use the REST API.
 
 #### 5.3.5 Authentication
 
-The IPC bridge uses a shared secret token generated at MCP server startup and written to a local runtime state file readable only by the current user. The GUI reads this token from the state file on startup and includes it as a Bearer token in all REST requests and as a query parameter during WebSocket upgrade. Requests without a valid token are rejected with HTTP 401.
+The IPC bridge uses a shared secret token generated at MCP server startup and written to a local runtime state file readable only by the current user. Clients read this token from the state file on startup and include it as a Bearer token in all REST requests and as a query parameter during WebSocket upgrade. Requests without a valid token are rejected with HTTP 401.
 
 #### 5.3.6 Availability Model
 
-The IPC bridge starts with the MCP server process. The GUI may start before or after the MCP server. If the GUI starts first, it polls the IPC bridge endpoint at a configurable interval (default: 2 seconds) until it becomes available, displaying a "Waiting for MCP backend..." status in the status bar. Once connected, the GUI subscribes to the WebSocket channel. On WebSocket disconnection, the GUI resumes polling and attempts to reconnect.
+The IPC bridge starts with the MCP server process. Clients may connect at any time after the bridge becomes available.
 
 ---
 
@@ -302,7 +291,7 @@ The Configuration Engine exposes the following operations to other subsystems:
 - **Delete profile:** Removes a profile by UUID. Deletion is rejected if the profile is currently in an active or reconnecting session state.
 - **Reorder profiles:** Persists a new display order for the profile list.
 
-All write operations trigger a file flush immediately and emit a `config_changed` event to notify any listeners (primarily the GUI's profile list view).
+All write operations trigger a file flush immediately and emit a `config_changed` event to notify any listeners.
 
 ---
 
@@ -323,15 +312,15 @@ If a command is submitted while no session is active, it is immediately rejected
 Two execution modes are supported:
 
 - **Exec mode:** A new exec channel is opened for each command. The command runs in a fresh environment, stdout and stderr are captured separately, and the channel's exit status code is retrieved. This mode is stateless between commands and is preferred for most MCP tool calls.
-- **Shell mode:** A persistent shell channel is maintained. Commands are written to the shell's stdin, and output is read until a sentinel marker is detected. This mode preserves shell state (environment variables, working directory, etc.) between commands and is used for the GUI's manual terminal panel.
+- **Shell mode:** A persistent shell channel is maintained. Commands are written to the shell's stdin, and output is read until a sentinel marker is detected. This mode preserves shell state (environment variables, working directory, etc.) between commands and is available for interactive sessions via the IPC terminal endpoint.
 
-The execution mode is selected at command submission time. MCP tool calls default to exec mode. The GUI manual terminal uses shell mode.
+The execution mode is selected at command submission time. MCP tool calls default to exec mode. Shell mode is available for interactive sessions via the IPC terminal endpoint.
 
 #### 5.5.4 Output Capture
 
 In exec mode, stdout and stderr are read in full after the command completes. A configurable maximum output size (default: 4 MB) prevents runaway output from consuming excessive memory. Output exceeding this limit is truncated with a truncation notice appended.
 
-In shell mode, output is streamed to the GUI's terminal panel in real time via the WebSocket event channel. Output is buffered in 512-byte chunks to balance latency and throughput.
+In shell mode, output is streamed to connected clients in real time via the WebSocket event channel. Output is buffered in 512-byte chunks to balance latency and throughput.
 
 #### 5.5.5 Timeout Policy
 
@@ -347,7 +336,7 @@ Every command execution produces a Result object containing: the original comman
 
 #### 5.6.1 Responsibility
 
-The Audit & Logging Subsystem records every significant event in the system to a persistent file and an in-memory ring buffer. The ring buffer powers the GUI's log viewer. The file provides durable audit history.
+The Audit & Logging Subsystem records every significant event in the system to a persistent file and an in-memory ring buffer. The ring buffer provides recent log access via the IPC API. The file provides durable audit history.
 
 #### 5.6.2 Event Categories
 
@@ -370,63 +359,11 @@ Log entries are written to a rotating log file. The file is rotated when it reac
 
 #### 5.6.5 In-Memory Ring Buffer
 
-The ring buffer holds the most recent N log entries (default: 5000) in memory. The GUI's log viewer reads from this buffer on initial display and subscribes to new entries via the WebSocket event channel. The ring buffer is thread-safe and supports concurrent reads from the GUI while the logging thread writes new entries.
+The ring buffer holds the most recent N log entries (default: 5000) in memory. Clients can read from this buffer via the `/logs` IPC endpoint and subscribe to new entries via the WebSocket event channel. The ring buffer is thread-safe and supports concurrent reads while the logging thread writes new entries.
 
 #### 5.6.6 Log Event Emitter
 
-After writing each entry to the file and ring buffer, the subsystem emits a `log_entry` event to the IPC bridge's event bus, which dispatches it to all connected WebSocket clients. This ensures the GUI's log viewer updates in real time without polling.
-
----
-
-### 5.7 CustomTkinter GUI Application
-
-#### 5.7.1 Responsibility
-
-The GUI application is the operator's control plane. It provides a professional, functional desktop interface for configuring servers, managing the exposed session, reading logs, and issuing manual commands. It communicates exclusively with the MCP backend via the IPC bridge and never directly touches SSH sessions or the configuration file.
-
-#### 5.7.2 Design Principles
-
-The GUI follows a non-fancy, professional design ethos. The colour palette is limited to a neutral dark theme with a single accent colour used sparingly for interactive elements and status indicators. Typography is clean and consistent, using a monospace font for log output and terminal panels and a sans-serif font for all other text. There are no animations, gradients, or decorative elements. Every pixel serves a functional purpose.
-
-CustomTkinter is used as the widget toolkit because it provides native-looking widgets with theme support while remaining pure Python. All layout uses the grid geometry manager for predictable, resizable layouts. Packing is avoided to ensure the application scales correctly when the user resizes the window.
-
-#### 5.7.3 Application Window Structure
-
-The application uses a single main window with a fixed left-side navigation rail and a right-side content area. The navigation rail contains icon-and-label buttons for each major panel. The content area renders the selected panel. A persistent status bar at the bottom of the window displays the IPC bridge connection status, the current session state, and the active server name.
-
-#### 5.7.4 Panels
-
-**Dashboard Panel:**
-The default panel shown on startup. Displays a summary card showing the currently exposed server (or "No server exposed"), connection duration, number of commands executed in this session, and the last command issued. Provides quick-action buttons: "Expose Server" (which switches to the Exposure Control Panel), "Connect Manual Terminal," and "View Full Log."
-
-**Server Configuration Panel:**
-A two-column layout. The left column shows a scrollable list of saved server profiles, each displayed as a compact card with the server's display name, hostname, and a coloured status dot (active, inactive, fault). Profile cards can be selected, reordered by drag-and-drop, and deleted via a context menu.
-
-The right column shows the edit form for the selected profile. Fields include: Display Name, Hostname / IP Address, SSH Port, Username, PPK Key File Path (with a file picker button that opens a native file dialog filtered to .ppk files), Connection Timeout, Keep-Alive Transport Interval, Keep-Alive Application Interval, Max Reconnect Attempts, and Notes. A Save button persists changes. A "Test Connection" button initiates a trial connection and reports success or failure without entering the exposed state.
-
-**Exposure Control Panel:**
-A prominent, dedicated panel for managing which server is exposed. Contains a dropdown selector populated with all saved profiles. Only one profile can be selected. Below the selector is a large "Expose Selected Server" button. When a server is exposed, this panel transforms: the dropdown becomes read-only, the expose button is replaced by a "Disconnect" button (styled in a distinct warning colour), and a live status area shows the connection duration, keep-alive last-ping time, and session UUID. An agent-connection indicator shows whether an AI agent is currently interacting with the session.
-
-**Log Viewer Panel:**
-A full-panel scrollable text area displaying the in-memory ring buffer contents. Entries are colour-coded by severity (INFO: default, WARNING: amber, ERROR: red, CRITICAL: bright red). A filter bar at the top allows filtering by event category and severity. A search box performs real-time text search across displayed entries. An "Auto-scroll" toggle (on by default) keeps the view pinned to the latest entry. An "Export Log" button saves the current filtered view to a text file. Log entries are never editable.
-
-**Manual Terminal Panel:**
-A split panel. The upper portion is a read-only output area displaying the shell session output in a monospace font. The lower portion is a single-line command input field with a "Send" button. The input field supports command history navigation with the Up and Down arrow keys, storing the last 200 commands in memory for the session. When no server session is active, the input field is disabled and a "No active session" message is shown in the output area. The terminal uses shell mode execution.
-
-**Settings Panel:**
-Global application settings not tied to any specific server profile. Includes: IPC bridge port override, UI theme selection (dark/light), log buffer size, log file retention settings, default command timeout, and a "Reset to Defaults" button. Settings are saved immediately on change.
-
-#### 5.7.5 IPC Client Module
-
-The GUI contains a dedicated IPC client module that manages the HTTP session for REST calls and the WebSocket connection. This module runs the WebSocket listener on a background thread and dispatches received events to the appropriate GUI components via a thread-safe event queue. All GUI widget updates happen on the main thread; the IPC client never directly touches widgets.
-
-#### 5.7.6 State Synchronisation
-
-On startup and on each WebSocket reconnection, the GUI fetches the full current state from the IPC REST API (session status, active profile, recent log entries). This ensures the GUI is always consistent with the backend state even if the GUI was restarted while the MCP backend was running with an active session.
-
-#### 5.7.7 Graceful Shutdown
-
-When the GUI is closed (the window's X button or a keyboard shortcut), a shutdown confirmation dialog is shown if a server session is currently active, warning the operator that closing the GUI will terminate the active session. If the operator confirms, the GUI sends a disconnect request to the IPC API before destroying the window. The MCP backend's own shutdown logic handles the SSH teardown.
+After writing each entry to the file and ring buffer, the subsystem emits a `log_entry` event to the IPC bridge's event bus, which dispatches it to all connected WebSocket clients.
 
 ---
 
@@ -470,7 +407,7 @@ Represents the live state of an SSH session.
 
 ### 6.3 CommandRequest
 
-Submitted by an MCP tool call or the GUI manual terminal.
+Submitted by an MCP tool call or the IPC terminal endpoint.
 
 | Field | Type | Description |
 |---|---|---|
@@ -514,14 +451,14 @@ A single audit log record.
 
 ---
 
-## 7. IPC Contract: MCP ↔ GUI
+## 7. IPC Contract
 
 All IPC API endpoints are served at `http://127.0.0.1:{ipc_port}/api/v1/`. Authentication uses a Bearer token in the `Authorization` header.
 
 ### 7.1 REST Endpoints
 
 #### `GET /health`
-Returns HTTP 200 with backend process uptime and version. No authentication required. Used by the GUI for polling during startup.
+Returns HTTP 200 with backend process uptime and version. No authentication required. Used for polling during startup.
 
 #### `GET /session/status`
 Returns the current SessionState object. Returns a DISCONNECTED state object if no session has ever been established.
@@ -539,7 +476,7 @@ No request body. Instructs the backend to cleanly terminate the active session. 
 Query parameters: `limit` (default 200, max 5000), `category` (optional filter), `level` (optional filter), `since` (optional ISO 8601 timestamp). Returns a paginated array of LogEntry objects from the ring buffer.
 
 #### `POST /terminal/send`
-Request body: `{ "command_text": "<command>" }`. Submits a command from the GUI's manual terminal to the shell-mode channel. Returns the command_id immediately. The output is streamed back via WebSocket events.
+Request body: `{ "command_text": "<command>" }`. Submits a command to the shell-mode channel. Returns the command_id immediately. The output is streamed back via WebSocket events.
 
 ### 7.2 WebSocket Endpoint
 
@@ -556,7 +493,7 @@ Every event has a `type` field and a `payload` field. The `type` field is a name
 - `command.completed` — A CommandResult object for a completed EXEC-mode command.
 - `terminal.output_chunk` — A chunk of terminal output: `{ "command_id": "<uuid>", "chunk": "<text>", "stream": "stdout|stderr" }`.
 - `keepalive.heartbeat` — A heartbeat acknowledgement: `{ "session_uuid": "<uuid>", "timestamp": "<ISO 8601>" }`.
-- `config.changed` — Notification that the profile list has changed; GUI should re-fetch `/profiles`.
+- `config.changed` — Notification that the profile list has changed; clients should re-fetch `/profiles`.
 
 ---
 
@@ -597,7 +534,7 @@ The following tools are exposed by the MCP server and discoverable by any MCP-co
 
 **Output:** An acknowledgement object containing the session_uuid and the initial state (CONNECTING). The agent should subsequently call `server_get_session_status` to confirm the connection reached the CONNECTED state before issuing commands.
 
-**Side effects:** Initiates SSH connection. Triggers `session.state_changed` events over the IPC WebSocket. GUI Exposure Control Panel updates to reflect the new state.
+**Side effects:** Initiates SSH connection. Triggers `session.state_changed` events over the IPC WebSocket.
 
 ---
 
@@ -611,7 +548,7 @@ The following tools are exposed by the MCP server and discoverable by any MCP-co
 
 **Output:** A CommandResult JSON object containing exit_code, stdout, stderr, truncated flag, duration_ms, and status.
 
-**Side effects:** Command is logged to the audit log with actor set to AGENT. Log entry is streamed to GUI log viewer.
+**Side effects:** Command is logged to the audit log with actor set to AGENT. Log entry is streamed to connected clients.
 
 **Error conditions:** Returns a structured error if no session is active (status: SESSION_UNAVAILABLE), if the session is in RECONNECTING or FAULT state, or if the command times out (status: TIMED_OUT).
 
@@ -625,7 +562,7 @@ The following tools are exposed by the MCP server and discoverable by any MCP-co
 
 **Output:** A confirmation object with the shell session identifier and an indication of whether a shell channel was freshly opened or was already active.
 
-**Side effects:** Opens a persistent shell channel if one is not already open. GUI Manual Terminal Panel reflects the active shell session.
+**Side effects:** Opens a persistent shell channel if one is not already open.
 
 ---
 
@@ -639,19 +576,19 @@ The following tools are exposed by the MCP server and discoverable by any MCP-co
 
 **Output:** A CommandResult-equivalent object with the captured output from the shell since the input was sent.
 
-**Side effects:** Input and output are logged. Terminal output is streamed to the GUI Manual Terminal Panel.
+**Side effects:** Input and output are logged. Terminal output is streamed to connected clients via the WebSocket channel.
 
 ---
 
 ### 8.7 `server_disconnect`
 
-**Description:** Cleanly terminates the currently active SSH session. This is one of three valid ways to end a session; the other two are the GUI Disconnect button and closing the GUI application.
+**Description:** Cleanly terminates the currently active SSH session. This is one of two valid ways to end a session; the other is via the IPC REST API disconnect endpoint.
 
 **Input schema:** No input parameters.
 
 **Output:** A confirmation object with the session_uuid of the session that was terminated and the final command statistics.
 
-**Side effects:** SSH channel and transport are closed. Session state transitions to DISCONNECTED. Keep-Alive Engine for this session is stopped. GUI Exposure Control Panel resets to the "no session" state. Log entry recorded with actor set to AGENT.
+**Side effects:** SSH channel and transport are closed. Session state transitions to DISCONNECTED. Keep-Alive Engine for this session is stopped. Log entry recorded with actor set to AGENT.
 
 ---
 
@@ -704,13 +641,7 @@ No session in the CONNECTED state will transition to RECONNECTING due to inactiv
 
 ### 9.4 Shutdown Behaviour
 
-When the GUI application's main window is closed:
-
-1. If session state is DISCONNECTED: the GUI exits immediately.
-2. If session state is CONNECTED, RECONNECTING, or FAULT: a modal confirmation dialog is shown.
-3. If the operator confirms shutdown: the GUI sends a `POST /session/disconnect` request to the IPC API, waits up to 10 seconds for a DISCONNECTED state confirmation via the WebSocket, then destroys the window regardless.
-4. The MCP backend process remains running after the GUI closes and continues to serve AI agent requests with the now-disconnected session state. The MCP backend does not automatically exit when the GUI disconnects.
-5. The MCP backend exits only when its host process (the terminal running `mcp serve`) receives a SIGTERM or SIGINT.
+The MCP backend exits when its host process (the terminal running `mcp serve`) receives a SIGTERM or SIGINT.
 
 ---
 
@@ -720,15 +651,15 @@ When the GUI application's main window is closed:
 
 PuTTY Private Key files are referenced by their filesystem path in the server profile. The actual file content is read only at connection time and immediately parsed into an in-memory key object. The key object is held in process memory for the duration of the session. It is never logged, never transmitted over the IPC bridge, and never written to any file other than its original .ppk location.
 
-PPK version 2 and version 3 are both supported. Password-protected PPK files are supported; the passphrase is requested via a modal dialog in the GUI at connection time and held in memory for the session duration. The passphrase is never persisted.
+PPK version 2 and version 3 are both supported. Password-protected PPK files are supported; the passphrase is supplied at connection time and held in memory for the session duration. The passphrase is never persisted.
 
 ### 10.2 IPC Token Security
 
-The IPC shared secret token is a cryptographically random 32-byte value, hex-encoded. It is generated fresh each time the MCP backend process starts. It is written to a runtime state file (`~/.config/servermind-mcp/runtime.json`) with permissions set to `600` (owner read/write only). The GUI reads this file to obtain the token. The token is never logged in any log output.
+The IPC shared secret token is a cryptographically random 32-byte value, hex-encoded. It is generated fresh each time the MCP backend process starts. It is written to a runtime state file (`~/.config/servermind-mcp/runtime.json`) with permissions set to `600` (owner read/write only). Clients read this file to obtain the token. The token is never logged in any log output.
 
 ### 10.3 Host Key Verification
 
-SSH host key verification is enabled by default. On first connection to a server, the host key is stored in a known_hosts file managed by the application (`~/.config/servermind-mcp/known_hosts`). On subsequent connections, the presented key is verified against the stored key. Host key mismatches result in a CONNECTING → DISCONNECTED transition with a SECURITY log entry and a prominent warning in the GUI. The operator must explicitly approve a host key change before connecting to a server whose key has changed.
+SSH host key verification is enabled by default. On first connection to a server, the host key is stored in a known_hosts file managed by the application (`~/.config/servermind-mcp/known_hosts`). On subsequent connections, the presented key is verified against the stored key. Host key mismatches result in a CONNECTING -> DISCONNECTED transition with a SECURITY log entry. The operator must explicitly approve a host key change via the IPC API before connecting to a server whose key has changed.
 
 ### 10.4 Privilege Model
 
@@ -810,35 +741,7 @@ servermind-mcp/
 │   ├── file_handler.py                # Rotating file handler configuration
 │   └── models.py                      # LogEntry dataclass
 │
-├── gui/                               # CustomTkinter GUI Application
-│   ├── __main__.py                    # GUI entry point
-│   ├── app.py                         # Root application class and window
-│   ├── ipc_client.py                  # IPC REST and WebSocket client
-│   ├── state.py                       # GUI-side state store (observable)
-│   ├── panels/                        # One module per navigation panel
-│   │   ├── __init__.py
-│   │   ├── dashboard.py
-│   │   ├── server_config.py
-│   │   ├── exposure_control.py
-│   │   ├── log_viewer.py
-│   │   ├── manual_terminal.py
-│   │   └── settings.py
-│   ├── widgets/                       # Reusable custom widget components
-│   │   ├── __init__.py
-│   │   ├── profile_card.py            # Server profile list card widget
-│   │   ├── status_dot.py              # Coloured connection status indicator
-│   │   ├── log_row.py                 # Single log entry display widget
-│   │   ├── nav_button.py              # Navigation rail button widget
-│   │   └── confirm_dialog.py         # Modal confirmation dialog
-│   ├── themes/                        # Theme definitions
-│   │   ├── dark.py
-│   │   └── light.py
-│   └── utils/                         # GUI utility functions
-│       ├── __init__.py
-│       ├── thread_bridge.py           # Thread-safe GUI update queue
-│       └── formatting.py             # Timestamp and text formatting helpers
-│
-├── shared/                            # Code shared between mcp_server and gui
+├── shared/                            # Code shared across modules
 │   ├── __init__.py
 │   ├── constants.py                   # Application-wide constants
 │   ├── exceptions.py                  # Custom exception hierarchy
@@ -872,13 +775,9 @@ servermind-mcp/
 
 ### 12.1 Process Topology
 
-The system runs as two separate OS processes:
+The system runs as a single OS process:
 
-**Process 1 — MCP Backend:** Started by the AI agent's MCP client or manually from the command line. Hosts the MCP server, the IPC bridge (FastAPI), the SSH Session Manager, the Command Execution Pipeline, and the Audit Logger. This process is the system's authoritative backend; it can run without the GUI.
-
-**Process 2 — GUI Application:** Started by the operator from the command line or a desktop shortcut. Hosts only the CustomTkinter GUI and the IPC client. This process is purely a control surface; it holds no session state and makes no SSH connections.
-
-Both processes communicate exclusively through the IPC bridge. The GUI never imports or calls any code from the MCP backend's modules.
+**MCP Backend Process:** Started by the AI agent's MCP client or manually from the command line. Hosts the MCP server, the IPC bridge (FastAPI), the SSH Session Manager, the Command Execution Pipeline, and the Audit Logger. This process is the authoritative backend for all session and command operations.
 
 ### 12.2 Startup Sequence — MCP Backend
 
@@ -889,20 +788,17 @@ Both processes communicate exclusively through the IPC bridge. The GUI never imp
 5. Start the MCP protocol listener (stdio or SSE, depending on invocation).
 6. Log `SYSTEM` INFO entry: "MCP backend started."
 
-### 12.3 Startup Sequence — GUI Application
+### 12.3 Startup Sequence — IPC Client
 
 1. Resolve the runtime state file path and read the IPC token.
-2. Attempt HTTP GET to `/api/v1/health` with the token; if unavailable, display "Waiting for MCP backend..." in the status bar and retry every 2 seconds.
+2. Attempt HTTP GET to `/api/v1/health` with the token; retry until available.
 3. On successful health response, fetch current session state and profile list.
-4. Render the main window with the Dashboard panel active.
-5. Open the WebSocket connection to `/ws/events`.
-6. Begin processing WebSocket events and updating GUI state.
+4. Open the WebSocket connection to `/ws/events`.
+5. Begin processing WebSocket events.
 
 ### 12.4 Recommended Invocation
 
-For normal use, the operator runs both processes. A helper shell script or a batch file is provided that starts the MCP backend as a background process and then immediately starts the GUI in the foreground. Closing the GUI foreground process does not kill the background MCP process.
-
-For AI agent use without a running GUI, the MCP backend alone is sufficient. The agent's MCP client starts the backend via stdio transport and interacts with it through tool calls.
+The MCP backend is started by the AI agent's MCP client via stdio transport, or manually from the command line for IPC API use. The agent's MCP client starts the backend via stdio transport and interacts with it through tool calls.
 
 ---
 
@@ -948,7 +844,7 @@ For AI agent use without a running GUI, the MCP backend alone is sufficient. The
                                                               (back to DISCONNECTED)
 ```
 
-### 13.2 GUI IPC Connection State
+### 13.2 IPC Client Connection State
 
 ```
   ┌──────────────┐       health poll        ┌──────────────┐
@@ -987,7 +883,7 @@ Log entries must never include raw private key content, passphrases, or the IPC 
 
 ### 14.6 Host Key Trust
 
-The application maintains its own known_hosts file and enforces strict host key verification. This provides protection against SSH man-in-the-middle attacks on the local network. Operators who need to accept a changed host key must do so explicitly through the GUI or a CLI flag.
+The application maintains its own known_hosts file and enforces strict host key verification. This provides protection against SSH man-in-the-middle attacks on the local network. Operators who need to accept a changed host key must do so explicitly via the IPC API or a CLI flag.
 
 ---
 
@@ -1006,13 +902,9 @@ Errors are classified into four tiers:
 
 All MCP tool handlers are wrapped in a top-level error boundary. Any unhandled exception that escapes a tool handler is caught by the boundary, logged as a Tier 4 error, and converted into a structured MCP error response rather than crashing the MCP server process. This ensures the agent always receives a parseable response.
 
-### 15.3 GUI Error Display
+### 15.3 Operator Error Recovery
 
-Errors affecting the session state are displayed in the Exposure Control Panel's status area. IPC connectivity errors are displayed in the status bar. Configuration errors are displayed inline in the Server Configuration Panel's edit form. No modal error dialogs are shown for non-fatal errors; they are relegated to the status bar and the Log Viewer Panel.
-
-### 15.4 Recovery Actions Available to Operators
-
-The GUI provides the following explicit recovery actions:
+Errors affecting the session state are communicated via the IPC API session status endpoint and WebSocket events. Operators can take the following explicit recovery actions via the IPC REST API:
 
 - **Retry Expose:** Available in FAULT state. Resets the reconnect counter and attempts a fresh connection.
 - **Clear Fault:** Available in FAULT state. Transitions to DISCONNECTED without attempting reconnection.
@@ -1035,12 +927,12 @@ The configuration file is a JSON object with the following top-level fields:
 | Field | Type | Default | Description |
 |---|---|---|---|
 | ipc_port | integer | 17432 | Port for the IPC bridge |
-| ui_theme | string ("dark"/"light") | "dark" | GUI colour theme |
+| ui_theme | string ("dark"/"light") | "dark" | Reserved for future client theming |
 | log_buffer_size | integer | 5000 | In-memory log ring buffer capacity |
 | log_max_file_size_mb | integer | 10 | Max log file size before rotation |
 | log_backup_count | integer | 5 | Number of rotated log files to retain |
 | default_command_timeout_sec | integer | 300 | Default per-command timeout |
-| ipc_poll_interval_ms | integer | 2000 | GUI IPC bridge polling interval |
+| ipc_poll_interval_ms | integer | 2000 | IPC bridge polling interval for clients |
 
 ### 16.3 File Location by Platform
 
@@ -1075,21 +967,11 @@ Contents: `{ "ipc_token": "<hex>", "ipc_port": <integer>, "pid": <integer>, "sta
 | `reconnect-{session_uuid}` | Reconnection Policy | Retry loop during RECONNECTING state |
 | `audit-writer` | Audit Logger | Writes log entries from a queue to file |
 
-### 17.2 GUI Thread Map
+### 17.2 Thread Safety Rules
 
-| Thread Name | Owner | Responsibility |
-|---|---|---|
-| `main` | Tkinter | Tkinter event loop; all widget updates must occur here |
-| `ipc-ws-listener` | IPC Client | Listens on WebSocket; pushes events to GUI event queue |
-| `ipc-poll` | IPC Client | Health polls during startup; terminates after connection |
+The Session Registry and the Command Queue are protected by threading locks. The Audit Logger uses a dedicated writer thread with a queue to avoid blocking the caller.
 
-### 17.3 Thread Safety Rules
-
-All widget manipulation must occur on the `main` thread. The `ipc-ws-listener` thread never touches widgets directly. Instead, it places event objects onto a thread-safe queue. The main thread processes this queue on a periodic `after()` callback (every 50ms). This is the standard Tkinter threading pattern.
-
-In the MCP backend, the Session Registry and the Command Queue are protected by threading locks. The Audit Logger uses a dedicated writer thread with a queue to avoid blocking the caller.
-
-### 17.4 Asyncio and Threading Boundary
+### 17.3 Asyncio and Threading Boundary
 
 The IPC bridge runs on asyncio (via FastAPI/uvicorn). The SSH Session Manager and Command Pipeline are synchronous. The boundary between asyncio code and synchronous code is managed through `asyncio.run_in_executor` calls, which run synchronous SSH and command operations in a thread pool without blocking the asyncio event loop.
 
@@ -1112,16 +994,7 @@ All dependencies are Python packages installed via pip. The project targets Pyth
 | `jsonschema` | JSON Schema validation for configuration files |
 | `cryptography` | Cryptographic primitives (IPC token generation, key handling support) |
 
-### 18.2 GUI Dependencies
-
-| Package | Purpose |
-|---|---|
-| `customtkinter` | Enhanced Tkinter widget toolkit with theming support |
-| `tkinter` | Python standard library GUI toolkit (bundled with Python) |
-| `httpx` | Async-capable HTTP client for IPC REST calls |
-| `websocket-client` | WebSocket client for the GUI's IPC WebSocket connection |
-
-### 18.3 Shared / Development Dependencies
+### 18.2 Development Dependencies
 
 | Package | Purpose |
 |---|---|
@@ -1138,7 +1011,7 @@ All dependencies are Python packages installed via pip. The project targets Pyth
 
 ### 19.1 Installation
 
-The project is packaged as a standard Python package with a `pyproject.toml`. Installation via pip installs all runtime dependencies and registers two console entry points: `servermind-mcp` (starts the MCP backend) and `servermind-gui` (starts the GUI application).
+The project is packaged as a standard Python package with a `pyproject.toml`. Installation via pip installs all runtime dependencies and registers the `servermind-mcp` console entry point (starts the MCP backend).
 
 ### 19.2 MCP Client Configuration
 
@@ -1159,11 +1032,10 @@ For VS Code with GitHub Copilot (SSE transport), the operator starts the MCP bac
 
 ### 19.3 Platform Support
 
-The system is designed to run on Linux, macOS, and Windows. Tkinter is available on all three platforms. Paramiko and FastAPI are cross-platform. Platform-specific considerations:
+The system is designed to run on Linux, macOS, and Windows. Paramiko and FastAPI are cross-platform. Platform-specific considerations:
 
 - **Windows:** PPK file path separators use backslash; the configuration engine normalises all paths to use forward slashes internally and re-normalises on write.
-- **macOS:** Tkinter may require XQuartz or a system Python with Tk compiled in; the README provides guidance.
-- **Linux:** All dependencies are available via pip with no additional system library requirements for most distributions.
+- **Linux / macOS:** All dependencies are available via pip with no additional system library requirements for most distributions.
 
 ### 19.4 No Installer Required
 
@@ -1175,7 +1047,7 @@ The application requires no system-level installer. All data is stored in the us
 
 ### 20.1 Multi-Session Support
 
-The architecture is designed with the single-session constraint as a policy decision, not a technical limitation. The Session Registry, Command Queue, and IPC bridge all use session UUIDs as identifiers, making it straightforward to lift the single-session constraint in a future version by removing the uniqueness check and updating the GUI's Exposure Control Panel to display multiple active sessions.
+The architecture is designed with the single-session constraint as a policy decision, not a technical limitation. The Session Registry, Command Queue, and IPC bridge all use session UUIDs as identifiers, making it straightforward to lift the single-session constraint in a future version by removing the uniqueness check.
 
 ### 20.2 Additional Authentication Methods
 

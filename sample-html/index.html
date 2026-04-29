@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ServerMind MCP — Test Page v2</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="hero">
+    <div class="badge">Deployed via MCP &mdash; v2 (server_upload_file)</div>
+    <h1>ServerMind <span>MCP</span></h1>
+    <p class="subtitle">
+      <strong style="color:#6ee7b7">v2 update</strong> — uploaded with the new
+      <code>server_upload_file</code> tool and deployed via
+      <code>server_execute_script</code>.
+    </p>
+    <div class="stats">
+      <div class="stat-card">
+        <span class="stat-number" data-target="100">0</span>
+        <span class="stat-label">% Automated</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number" data-target="3">0</span>
+        <span class="stat-label">Files Deployed</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-number" data-target="0">0</span>
+        <span class="stat-label">Manual Steps</span>
+      </div>
+    </div>
+    <button class="btn" id="celebrate">Celebrate 🎉</button>
+  </div>
+
+  <section class="steps">
+    <h2>How it got here</h2>
+    <ol>
+      <li><strong>Created</strong> locally in the workspace</li>
+      <li><strong>Packaged</strong> into <code>export.tar.gz</code></li>
+      <li><strong>Uploaded</strong> via <code>server_upload_file</code> MCP tool</li>
+      <li><strong>Extracted</strong> via <code>server_execute_script</code></li>
+      <li><strong>Served</strong> with Python HTTP server</li>
+    </ol>
+  </section>
+
+  <footer>
+    <p>ServerMind MCP &mdash; AI-powered remote server control</p>
+  </footer>
+
+  <div id="confetti-container"></div>
+  <script src="script.js"></script>
+</body>
+</html>

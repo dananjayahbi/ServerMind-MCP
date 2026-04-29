@@ -306,7 +306,7 @@ tbody tr:hover{background:#f8faff}
 
 <!-- Server Modal -->
 <div id="server-modal" class="modal-backdrop" style="display:none">
-  <div class="modal">
+  <div class="modal" style="max-width:600px">
     <h2 id="modal-title">Add Server</h2>
     <div class="form-grid">
       <div class="form-group">
@@ -344,6 +344,10 @@ tbody tr:hover{background:#f8faff}
         </div>
         <input type="file" id="f-ppk-file" accept=".ppk,.pem,.key,.rsa" style="display:none"/>
         <span id="f-ppk-upload-status" style="font-size:11px;color:var(--text-muted)"></span>
+      </div>
+      <div class="form-group" style="grid-column:span 2">
+        <label>Sudo Password <span style="font-weight:400;color:var(--text-muted)">(optional — used to auto-supply sudo prompts)</span></label>
+        <input id="f-sudo-pw" type="password" placeholder="Leave blank if not needed"/>
       </div>
       <div class="form-group" style="grid-column:span 2">
         <label>Notes</label>
@@ -564,7 +568,9 @@ function connectEvWs() {
         else if (ev.type === 'log.entry') appendLogEntry(ev.payload);
         else if (ev.type === 'terminal.output_chunk') {
           // MCP agent command output piped to web terminal in real-time
-          if (term && ev.payload && ev.payload.stream === 'exec') {
+          // Accept both 'exec' (execute_command/execute_script) and 'stdout' (send_terminal_input shell mode)
+          const stream = ev.payload && ev.payload.stream;
+          if (term && ev.payload && (stream === 'exec' || stream === 'stdout')) {
             const chunk = ev.payload.chunk || '';
             if (chunk) term.write(chunk.replace(/\n/g, '\r\n'));
           }
@@ -697,7 +703,7 @@ function renderServersPage() {
     </div>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Host</th><th>Port</th><th>User</th><th>Auth</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Name</th><th>Host</th><th>Port</th><th>User</th><th>Auth</th><th>Sudo</th><th>Actions</th></tr></thead>
         <tbody id="servers-tbody"></tbody>
       </table>
     </div>
@@ -710,7 +716,7 @@ function renderServerRows() {
   const tbody = document.getElementById('servers-tbody');
   if (!tbody) return;
   if (!state.profiles.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:32px">No servers configured. Click + Add Server.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:32px">No servers configured. Click + Add Server.</td></tr>';
     return;
   }
   tbody.innerHTML = state.profiles.map(p => {
@@ -718,12 +724,17 @@ function renderServerRows() {
     const actionBtn = isActive
       ? `<button class="btn btn-danger btn-sm" onclick="disconnectServer()">Disconnect</button>`
       : `<button class="btn btn-success btn-sm" onclick="connectProfile('${p.id}')">Connect</button>`;
+    const authLabel = (p.auth_method || 'password') === 'ppk' ? 'PPK Key' : 'Password';
+    const sudoBadge = p.sudo_password
+      ? `<span class="badge badge-info" title="Sudo password configured">Configured</span>`
+      : `<span class="badge badge-muted">None</span>`;
     return `<tr>
       <td><strong>${esc(p.display_name)}</strong>${isActive ? ' <span class="badge badge-success" style="margin-left:4px">Active</span>' : ''}</td>
       <td>${esc(p.hostname)}</td>
       <td>${p.port || 22}</td>
       <td>${esc(p.username)}</td>
-      <td><span class="badge badge-muted">${esc(p.auth_method || 'password')}</span></td>
+      <td><span class="badge badge-muted">${esc(authLabel)}</span></td>
+      <td>${sudoBadge}</td>
       <td>
         <div style="display:flex;gap:6px">
           ${actionBtn}
@@ -767,9 +778,11 @@ function openServerModal(profile = null) {
   document.getElementById('f-port').value = profile ? (profile.port || 22) : 22;
   document.getElementById('f-user').value = profile ? profile.username : '';
   document.getElementById('f-auth').value = profile ? (profile.auth_method || 'password') : 'password';
-  document.getElementById('f-pw').value = '';
+  document.getElementById('f-pw').value = profile ? (profile.password || '') : '';
   document.getElementById('f-ppk').value = profile ? (profile.ppk_file_path || '') : '';
+  document.getElementById('f-sudo-pw').value = profile ? (profile.sudo_password || '') : '';
   document.getElementById('f-notes').value = profile ? (profile.notes || '') : '';
+  document.getElementById('f-ppk-upload-status').textContent = '';
   toggleAuthFields();
   document.getElementById('server-modal').style.display = 'flex';
 }
@@ -787,12 +800,14 @@ document.getElementById('modal-save').addEventListener('click', async () => {
   const user = document.getElementById('f-user').value.trim();
   if (!name || !host || !user) { toast('Name, Hostname, and Username are required', 'error'); return; }
   const auth = document.getElementById('f-auth').value;
+  const sudoPw = document.getElementById('f-sudo-pw').value;
   const body = {
     display_name: name, hostname: host,
     port: parseInt(document.getElementById('f-port').value) || 22,
     username: user, auth_method: auth,
     password: auth === 'password' ? document.getElementById('f-pw').value : undefined,
     ppk_file_path: auth === 'ppk' ? document.getElementById('f-ppk').value.trim() : undefined,
+    sudo_password: sudoPw || undefined,
     notes: document.getElementById('f-notes').value.trim() || undefined,
   };
   let r;
@@ -875,18 +890,118 @@ function renderLogRows() {
 setInterval(() => { if (currentPage === 'logs') fetchLogs(); }, 5000);
 
 // ── Settings page ─────────────────────────────────────────────────────────────
-function renderSettingsPage() {
-  document.getElementById('page-settings').innerHTML = `
-    <div class="section-header"><div><h2>Settings</h2><p>Configuration options</p></div></div>
-    <div class="card">
-      <div class="card-title">Web UI</div>
-      <p style="color:var(--text-secondary);font-size:13px">More settings coming soon.</p>
-      <div style="margin-top:16px;font-size:12px;color:var(--text-muted)">
-        <div>IPC Port: <strong>17432</strong></div>
-        <div>Token: <strong>${TOKEN.slice(0,8)}…</strong></div>
+let _settingsCache = null;
+
+async function renderSettingsPage() {
+  const el = document.getElementById('page-settings');
+  el.innerHTML = `
+    <div class="section-header"><div><h2>Settings</h2><p>Application configuration</p></div></div>
+    <div class="card" id="settings-card">
+      <div style="display:flex;align-items:center;gap:8px;color:var(--text-muted);font-size:13px">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        Loading settings…
       </div>
     </div>
   `;
+  const data = await GET('/api/v1/settings');
+  if (!data) {
+    document.getElementById('settings-card').innerHTML = `<p style="color:var(--error)">Failed to load settings.</p>`;
+    return;
+  }
+  _settingsCache = data;
+  document.getElementById('settings-card').innerHTML = `
+    <div class="card-title">General</div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>IPC Port <span style="font-weight:400;color:var(--text-muted)">(restart required)</span></label>
+        <input id="s-ipc-port" type="number" min="1024" max="65535" value="${data.ipc_port}"/>
+      </div>
+      <div class="form-group">
+        <label>UI Theme</label>
+        <select id="s-ui-theme">
+          <option value="dark" ${data.ui_theme === 'dark' ? 'selected' : ''}>Dark</option>
+          <option value="light" ${data.ui_theme === 'light' ? 'selected' : ''}>Light</option>
+        </select>
+      </div>
+    </div>
+    <div class="card-title" style="margin-top:8px">Logging</div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Log Buffer Size <span style="color:var(--text-muted)">(entries)</span></label>
+        <input id="s-log-buf" type="number" min="100" value="${data.log_buffer_size}"/>
+      </div>
+      <div class="form-group">
+        <label>Log Max File Size <span style="color:var(--text-muted)">(MB)</span></label>
+        <input id="s-log-size" type="number" min="1" value="${data.log_max_file_size_mb}"/>
+      </div>
+      <div class="form-group">
+        <label>Log Backup Count</label>
+        <input id="s-log-bak" type="number" min="0" value="${data.log_backup_count}"/>
+      </div>
+    </div>
+    <div class="card-title" style="margin-top:8px">Execution</div>
+    <div class="form-grid">
+      <div class="form-group">
+        <label>Default Command Timeout <span style="color:var(--text-muted)">(seconds)</span></label>
+        <input id="s-cmd-timeout" type="number" min="1" value="${data.default_command_timeout_sec}"/>
+      </div>
+      <div class="form-group">
+        <label>IPC Poll Interval <span style="color:var(--text-muted)">(ms)</span></label>
+        <input id="s-poll-ms" type="number" min="100" value="${data.ipc_poll_interval_ms}"/>
+      </div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
+      <button class="btn btn-ghost" id="btn-reset-settings">Reset to Defaults</button>
+    </div>
+    <div id="settings-msg" style="margin-top:12px;font-size:13px"></div>
+    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;color:var(--text-muted)">
+      <strong>Current token:</strong> ${TOKEN.slice(0,8)}…
+    </div>
+  `;
+
+  document.getElementById('btn-save-settings').addEventListener('click', saveSettings);
+  document.getElementById('btn-reset-settings').addEventListener('click', resetSettings);
+}
+
+async function saveSettings() {
+  const btn = document.getElementById('btn-save-settings');
+  const msg = document.getElementById('settings-msg');
+  btn.disabled = true;
+  msg.textContent = '';
+  const body = {
+    ipc_port: parseInt(document.getElementById('s-ipc-port').value) || undefined,
+    ui_theme: document.getElementById('s-ui-theme').value || undefined,
+    log_buffer_size: parseInt(document.getElementById('s-log-buf').value) || undefined,
+    log_max_file_size_mb: parseInt(document.getElementById('s-log-size').value) || undefined,
+    log_backup_count: parseInt(document.getElementById('s-log-bak').value) || undefined,
+    default_command_timeout_sec: parseInt(document.getElementById('s-cmd-timeout').value) || undefined,
+    ipc_poll_interval_ms: parseInt(document.getElementById('s-poll-ms').value) || undefined,
+  };
+  // Remove undefined keys
+  Object.keys(body).forEach(k => body[k] === undefined && delete body[k]);
+
+  const r = await PUT('/api/v1/settings', body);
+  btn.disabled = false;
+  if (r) {
+    _settingsCache = r;
+    msg.style.color = 'var(--success)';
+    msg.textContent = 'Settings saved successfully.';
+  } else {
+    msg.style.color = 'var(--error)';
+    msg.textContent = 'Failed to save settings. Check values and try again.';
+  }
+}
+
+async function resetSettings() {
+  const defaults = {
+    ipc_port: 17432, ui_theme: 'dark', log_buffer_size: 5000,
+    log_max_file_size_mb: 10, log_backup_count: 5,
+    default_command_timeout_sec: 300, ipc_poll_interval_ms: 2000,
+  };
+  const r = await PUT('/api/v1/settings', defaults);
+  if (r) { toast('Settings reset to defaults', 'success'); await renderSettingsPage(); }
+  else toast('Failed to reset settings', 'error');
 }
 
 // ── Confirm dialog ────────────────────────────────────────────────────────────

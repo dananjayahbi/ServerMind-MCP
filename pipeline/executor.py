@@ -30,6 +30,8 @@ def execute(request: CommandRequest) -> CommandResult:
 
     if request.execution_mode == ExecMode.SHELL:
         result = manager.send_terminal_input(request)
+    elif request.execution_mode == ExecMode.SCRIPT:
+        result = manager.execute_script(request)
     else:
         result = manager.execute_command(request)
 

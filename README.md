@@ -1,25 +1,23 @@
 # ServerMind MCP
 
-**ServerMind MCP** is a dual-surface infrastructure control system: an MCP-compliant backend server and a desktop GUI built with CustomTkinter.
+**ServerMind MCP** is an MCP-compliant backend server that exposes remote SSH infrastructure to AI coding agents.
 
 ## Features
 
 - Expose remote SSH servers to AI coding agents (Claude Code, GitHub Copilot, etc.)
 - Persistent SSH sessions with keep-alive and auto-reconnect
 - Full audit logging of every command
-- Professional desktop GUI for operator control
 - Strict loopback-only IPC - no external network exposure
 
 ---
 
 ## Entry Points
 
-There are **two separate entry points**:
+There is **one entry point**:
 
 | Entry Point | Purpose |
 |---|---|
 | `servermind-mcp` | MCP backend server (registers with Claude / AI agents) |
-| `servermind-gui` | Desktop control GUI (CustomTkinter) |
 
 ---
 
@@ -37,13 +35,10 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-This registers two commands on your system:
+This registers the command on your system:
 - `servermind-mcp` - run the MCP backend
-- `servermind-gui` - run the desktop GUI
 
-> **Windows note:** If pip warns that the scripts directory is not on PATH, you can either:
-> - Add the Scripts folder (e.g. `%APPDATA%\Python\Python3xx\Scripts`) to your `PATH`, **or**
-> - Use the included `.bat` / `.vbs` launch files instead (they call `python -m ...` directly and always work)
+> **Windows note:** If pip warns that the scripts directory is not on PATH, add the Scripts folder (e.g. `%APPDATA%\Python\Python3xx\Scripts`) to your `PATH`.
 
 ---
 
@@ -73,50 +68,6 @@ python -m mcp_server
 ```bash
 servermind-mcp --transport sse --sse-port 17433
 ```
-
----
-
-### Entry Point 2 - Desktop GUI
-
-The GUI provides a visual interface for managing server profiles, sessions, and logs.
-It connects to the MCP backend via the loopback IPC bridge (port 17432).
-
-**Option A - Silent launch (no console window) - Recommended for Windows:**
-```
-Double-click: StartGUI.vbs
-```
-Or create a shortcut to `StartGUI.vbs`. This uses `pythonw` to suppress the console.
-
-**Option B - Using the installed command:**
-```bash
-servermind-gui
-```
-
-**Option C - Batch file (shows console, good for debugging):**
-```bat
-start_gui.bat
-```
-
-**Option D - Python directly:**
-```bash
-python -m gui
-```
-
----
-
-## Running Both Together (Typical Workflow)
-
-1. Start the MCP backend (it writes `runtime.json` with the IPC token):
-   ```bat
-   start_mcp.bat
-   ```
-   Or configure it in Claude Desktop (see below) so it starts automatically.
-
-2. Launch the GUI:
-   ```
-   Double-click StartGUI.vbs
-   ```
-   The GUI polls for the backend every 2 seconds and connects automatically.
 
 ---
 

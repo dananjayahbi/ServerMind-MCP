@@ -19,11 +19,13 @@ from mcp_server.tools import (
     connect_terminal,
     disconnect,
     execute_command,
+    execute_script,
     expose,
     get_session_status,
     list_profiles,
     read_log,
     send_terminal_input,
+    upload_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,6 +90,52 @@ TOOL_CATALOGUE: list[Tool] = [
                     "type": "integer",
                     "description": "Max seconds to wait (default 300).",
                     "default": 300,
+                },
+            },
+        },
+    ),
+    Tool(
+        name="server_execute_script",
+        description=(
+            "Executes a multi-line bash script on the currently exposed server in a single SSH call. "
+            "All commands run sequentially in the same bash environment and the full combined output "
+            "is returned at once. Prefer this over multiple server_execute_command calls to reduce "
+            "round-trips and token usage."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["script"],
+            "properties": {
+                "script": {
+                    "type": "string",
+                    "description": "Multi-line bash script to execute. Commands run sequentially.",
+                },
+                "timeout_sec": {
+                    "type": "integer",
+                    "description": "Max seconds to wait for the whole script (default 300).",
+                    "default": 300,
+                },
+            },
+        },
+    ),
+    Tool(
+        name="server_upload_file",
+        description=(
+            "Uploads a local file (on the machine running the MCP server) to the remote SSH server "
+            "via SFTP. Provide the absolute local path and the desired absolute remote path. "
+            "Use server_execute_command to extract archives or set permissions after upload."
+        ),
+        inputSchema={
+            "type": "object",
+            "required": ["local_path", "remote_path"],
+            "properties": {
+                "local_path": {
+                    "type": "string",
+                    "description": "Absolute path to the local file to upload.",
+                },
+                "remote_path": {
+                    "type": "string",
+                    "description": "Absolute destination path on the remote server.",
                 },
             },
         },
@@ -166,6 +214,8 @@ _HANDLERS: dict[str, Any] = {
     "server_get_session_status": get_session_status.handle,
     "server_expose": expose.handle,
     "server_execute_command": execute_command.handle,
+    "server_execute_script": execute_script.handle,
+    "server_upload_file": upload_file.handle,
     "server_connect_terminal": connect_terminal.handle,
     "server_send_terminal_input": send_terminal_input.handle,
     "server_disconnect": disconnect.handle,

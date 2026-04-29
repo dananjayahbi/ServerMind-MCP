@@ -1,1 +1,0 @@
-"""GUI panel modules."""

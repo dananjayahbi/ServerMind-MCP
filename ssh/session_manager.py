@@ -15,7 +15,7 @@ from shared.exceptions import (
 )
 from shared.models import CommandRequest, CommandResult, ServerProfile, SessionStateModel
 from ssh.connection import establish_connection
-from ssh.exec_channel import run_exec_command
+from ssh.exec_channel import run_exec_command, run_exec_script
 from ssh.keepalive import KeepAliveEngine
 from ssh.reconnect import ReconnectPolicy
 from ssh.session_registry import SessionRegistry
@@ -55,6 +55,8 @@ class SessionManager:
         self._lock = threading.RLock()
         # Map session_uuid -> paramiko client
         self._clients: dict[str, Any] = {}
+        # Map session_uuid -> ServerProfile (for sudo_password lookup etc.)
+        self._session_profiles: dict[str, ServerProfile] = {}
         # Terminal output callback: (session_uuid, command_id, chunk, stream) -> None
         self._terminal_output_callback: Callable[[str, str, str, str], None] | None = None
 
@@ -81,6 +83,7 @@ class SessionManager:
         with self._lock:
             # Will raise SessionAlreadyExposedError if another is active
             entry = self._registry.register(session_uuid, profile.id)
+            self._session_profiles[session_uuid] = profile
 
         audit_log.info(
             EventCategory.CONNECTION,
@@ -202,6 +205,7 @@ class SessionManager:
                 except Exception:
                     pass
 
+            self._session_profiles.pop(session_uuid, None)
             self._registry.update_state(session_uuid, SessionState.DISCONNECTED)
             self._registry.remove(session_uuid)
 
@@ -321,7 +325,9 @@ class SessionManager:
                 stderr="Session client not found.",
             )
 
-        result = run_exec_command(client, request)
+        profile = self._session_profiles.get(active.session_uuid)
+        sudo_pw = profile.sudo_password or None if profile else None
+        result = run_exec_command(client, request, sudo_password=sudo_pw)
 
         # Update stats
         active.commands_executed += 1
@@ -329,6 +335,64 @@ class SessionManager:
         active.last_command_at = datetime.now(timezone.utc).isoformat()
 
         return result
+
+    def execute_script(self, request: CommandRequest) -> CommandResult:
+        """Execute a multi-line bash script on the active session via bash -s."""
+        active = self._registry.get_exposed()
+        if not active:
+            return CommandResult(
+                command_id=request.command_id,
+                status="SESSION_UNAVAILABLE",
+                stdout="",
+                stderr="No active SSH session. Use server_expose first.",
+            )
+
+        client = self._clients.get(active.session_uuid)
+        if not client:
+            return CommandResult(
+                command_id=request.command_id,
+                status="SESSION_UNAVAILABLE",
+                stdout="",
+                stderr="Session client not found.",
+            )
+
+        profile = self._session_profiles.get(active.session_uuid)
+        sudo_pw = profile.sudo_password or None if profile else None
+        result = run_exec_script(client, request, sudo_password=sudo_pw)
+
+        active.commands_executed += 1
+        from datetime import datetime, timezone
+        active.last_command_at = datetime.now(timezone.utc).isoformat()
+
+        return result
+
+    def upload_file(self, local_path: str, remote_path: str) -> dict:
+        """Upload a local file to the remote server via SFTP."""
+        import os
+        active = self._registry.get_exposed()
+        if not active:
+            return {"success": False, "error": "No active SSH session. Use server_expose first."}
+
+        client = self._clients.get(active.session_uuid)
+        if not client:
+            return {"success": False, "error": "Session client not found."}
+
+        if not os.path.isfile(local_path):
+            return {"success": False, "error": f"Local file not found: {local_path}"}
+
+        try:
+            file_size = os.path.getsize(local_path)
+            sftp = client.open_sftp()
+            sftp.put(local_path, remote_path)
+            sftp.close()
+            return {
+                "success": True,
+                "local_path": local_path,
+                "remote_path": remote_path,
+                "bytes_transferred": file_size,
+            }
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
 
     # ------------------------------------------------------------------
     # Shell Channel

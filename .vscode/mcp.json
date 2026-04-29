@@ -1,8 +1,0 @@
-{
-  "servers": {
-    "servermind-mcp": {
-      "type": "sse",
-      "url": "http://127.0.0.1:17433/sse"
-    }
-  }
-}

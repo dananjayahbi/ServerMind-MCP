@@ -36,6 +36,9 @@ class ServerProfile:
 
     id: str = field(default_factory=_new_uuid)
     port: int = DEFAULT_SSH_PORT
+    auth_method: str = "password"
+    password: str = ""
+    sudo_password: str = ""
     keepalive_transport_interval_sec: int = DEFAULT_KEEPALIVE_TRANSPORT_INTERVAL
     keepalive_app_interval_sec: int = DEFAULT_KEEPALIVE_APP_INTERVAL
     connection_timeout_sec: int = DEFAULT_CONNECTION_TIMEOUT
@@ -53,6 +56,9 @@ class ServerProfile:
             "port": self.port,
             "username": self.username,
             "ppk_file_path": self.ppk_file_path,
+            "auth_method": self.auth_method,
+            "password": self.password,
+            "sudo_password": self.sudo_password,
             "keepalive_transport_interval_sec": self.keepalive_transport_interval_sec,
             "keepalive_app_interval_sec": self.keepalive_app_interval_sec,
             "connection_timeout_sec": self.connection_timeout_sec,
@@ -71,7 +77,10 @@ class ServerProfile:
             hostname=data["hostname"],
             port=data.get("port", DEFAULT_SSH_PORT),
             username=data["username"],
-            ppk_file_path=data["ppk_file_path"],
+            ppk_file_path=data.get("ppk_file_path", ""),
+            auth_method=data.get("auth_method", "password"),
+            password=data.get("password", ""),
+            sudo_password=data.get("sudo_password", ""),
             keepalive_transport_interval_sec=data.get(
                 "keepalive_transport_interval_sec", DEFAULT_KEEPALIVE_TRANSPORT_INTERVAL
             ),

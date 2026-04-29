@@ -187,8 +187,12 @@ class ShellChannel:
         # Strip the sentinel and echo of the command from output
         output = re.sub(re.escape(sentinel), "", output).strip()
 
-        if self._output_callback:
-            self._output_callback(request.command_id, output, "stdout")
+        with self._cb_lock:
+            for cb in list(self._output_callbacks):
+                try:
+                    cb(request.command_id, output, "stdout")
+                except Exception:
+                    logger.exception("Error in shell output callback")
 
         return CommandResult(
             command_id=request.command_id,

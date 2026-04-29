@@ -28,6 +28,24 @@ TOOL_SCHEMAS: dict[str, dict] = {
         },
         "additionalProperties": False,
     },
+    "server_execute_script": {
+        "type": "object",
+        "required": ["script"],
+        "properties": {
+            "script": {"type": "string", "minLength": 1},
+            "timeout_sec": {"type": "integer", "minimum": 1, "maximum": 3600},
+        },
+        "additionalProperties": False,
+    },
+    "server_upload_file": {
+        "type": "object",
+        "required": ["local_path", "remote_path"],
+        "properties": {
+            "local_path": {"type": "string", "minLength": 1},
+            "remote_path": {"type": "string", "minLength": 1},
+        },
+        "additionalProperties": False,
+    },
     "server_connect_terminal": {
         "type": "object",
         "properties": {},

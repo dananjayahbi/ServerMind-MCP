@@ -27,8 +27,5 @@ jsonschema>=4.22.0
 # Cryptography (IPC token generation)
 cryptography>=42.0.0
 
-# Desktop GUI
-customtkinter>=5.2.2
-
-# HTTP client for GUI IPC calls
+# HTTP client for IPC calls
 httpx>=0.27.0
