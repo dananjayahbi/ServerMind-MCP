@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import path from "path";
+import { readFile } from "fs/promises";
+import { existsSync } from "fs";
 import { prisma } from "@/lib/prisma";
 import { ipcFetch } from "@/lib/ipc-client";
-import type { WFNode, WFEdge, WFNodeLog, CommandNodeData, ScriptNodeData, FileWriteNodeData, DelayNodeData } from "@/types/workflow";
+import type { WFNode, WFEdge, WFNodeLog, CommandNodeData, ScriptNodeData, FileWriteNodeData, FileUploadNodeData, DelayNodeData } from "@/types/workflow";
 
 async function sendToTerminal(text: string): Promise<void> {
   try {
@@ -101,6 +104,12 @@ async function runWorkflow(
   // Topological sort: find execution order
   const ordered = topoSort(nodes, edges);
 
+  // Track effective working directory across stateless exec calls.
+  // Each /exec runs a fresh shell, so we must simulate CWD manually.
+  // When a command node runs 'cd <path>', we update this variable.
+  // Relative paths are resolved against it; uploads use it as the default location.
+  let trackedCwd = "$HOME";
+
   await sendToTerminal(`\r\n\x1b[36m\u2501\u2501\u2501 Workflow: ${execId} \u2501\u2501\u2501\x1b[0m\r\n`);
   await sendToTerminal(`\x1b[2m${prompt}\x1b[0m\r\n\r\n`);
 
@@ -124,9 +133,11 @@ async function runWorkflow(
           const data = node.data as CommandNodeData;
           commandText = interpolate(data.command, vars);
           await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1m${commandText}\x1b[0m\r\n`);
+          // Prepend cd so each stateless SSH exec runs in the tracked working directory.
+          const execCmd = trackedCwd === "$HOME" ? commandText : `cd "${trackedCwd}" && ${commandText}`;
           const res = await ipcFetch("/exec", {
             method: "POST",
-            body: JSON.stringify({ command: commandText, timeout_sec: data.timeout || 300 }),
+            body: JSON.stringify({ command: execCmd, timeout_sec: data.timeout || 300 }),
           });
           const result = await res.json();
           const _stdout = result.stdout || "";
@@ -136,13 +147,42 @@ async function runWorkflow(
           if (!res.ok && !data.continue_on_error) {
             throw new Error(result.detail || result.error || `Command failed (${res.status})`);
           }
+          // ── Track CWD: parse 'cd <path>' commands ─────────────────────────
+          // Only single-statement cd commands are tracked (not pipelines or semicolons).
+          const cdMatch = commandText.trim().match(/^cd\s+(.+)$/);
+          if (cdMatch) {
+            const cdArg = cdMatch[1].trim();
+            if (cdArg === "~" || cdArg === "") {
+              trackedCwd = "$HOME";
+            } else if (cdArg === "-") {
+              // cd - (prev dir) — can't track reliably, reset to $HOME
+              trackedCwd = "$HOME";
+            } else if (cdArg === "..") {
+              // Go up one level in trackedCwd
+              const parts = trackedCwd.split("/").filter(Boolean);
+              parts.pop();
+              trackedCwd = parts.length === 0 ? "$HOME" : parts.join("/");
+            } else if (cdArg.startsWith("/")) {
+              // Absolute path
+              trackedCwd = cdArg;
+            } else if (cdArg.startsWith("~/")) {
+              // ~/subdir → $HOME/subdir
+              trackedCwd = `$HOME/${cdArg.slice(2)}`;
+            } else if (cdArg.startsWith("$HOME")) {
+              trackedCwd = cdArg;
+            } else {
+              // Relative path — append to current tracked CWD
+              trackedCwd = `${trackedCwd}/${cdArg}`;
+            }
+          }
         } else if (node.type === "script") {
           const data = node.data as ScriptNodeData;
           const script = interpolate(data.script, vars);
           commandText = `bash <<'EOF'\n${script}\nEOF`;
           await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1mbash <<'EOF'\x1b[0m\r\n\x1b[2m${script}\x1b[0m\r\n\x1b[2mEOF\x1b[0m\r\n`);
           const tmpPath = `/tmp/wf_script_${execId}_${node.id}.sh`;
-          const writeCmd = `cat > ${tmpPath} << 'WFEOF'\n${script}\nWFEOF\nchmod +x ${tmpPath} && bash ${tmpPath}; rm -f ${tmpPath}`;
+          const cdPrefix = trackedCwd === "$HOME" ? "" : `cd "${trackedCwd}" && `;
+          const writeCmd = `cat > ${tmpPath} << 'WFEOF'\n${script}\nWFEOF\n${cdPrefix}chmod +x ${tmpPath} && bash ${tmpPath}; rm -f ${tmpPath}`;
           const res = await ipcFetch("/exec", {
             method: "POST",
             body: JSON.stringify({ command: writeCmd, timeout_sec: data.timeout || 600 }),
@@ -162,7 +202,8 @@ async function runWorkflow(
           const sudoPrefix = data.sudo ? "sudo " : "";
           commandText = `${sudoPrefix}tee ${path}`;
           await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1m${commandText}\x1b[0m\r\n`);
-          const cmd = `${sudoPrefix}tee ${path} > /dev/null << 'WFFILEEOF'\n${content}\nWFFILEEOF`;
+          const cdFilePrefix = trackedCwd === "$HOME" ? "" : `cd "${trackedCwd}" && `;
+          const cmd = `${cdFilePrefix}${sudoPrefix}tee ${path} > /dev/null << 'WFFILEEOF'\n${content}\nWFFILEEOF`;
           const res = await ipcFetch("/exec", {
             method: "POST",
             body: JSON.stringify({ command: cmd, timeout_sec: 30 }),
@@ -173,6 +214,125 @@ async function runWorkflow(
           output = [_stdout, _stderr].filter((s) => s.trim()).join("\n") || `Written to ${path}`;
           if (output) await sendToTerminal(`${output}\r\n`);
           if (!res.ok) throw new Error(result.detail || result.error || `File write failed (${res.status})`);
+        } else if (node.type === "file_upload") {
+          const data = node.data as FileUploadNodeData;
+          const fileName = data.local_file_name || "file";
+          // remote_path is optional — default to trackedCwd/filename
+          // (trackedCwd reflects any preceding 'cd' commands in the workflow)
+          const rawRemotePath = data.remote_path ? interpolate(data.remote_path, vars).trim() : "";
+          // Expand leading ~/ or bare ~ → $HOME so bash handles it inside double-quoted strings.
+          function expandTilde(p: string) {
+            if (p === "~") return "$HOME";
+            if (p.startsWith("~/")) return `$HOME/${p.slice(2)}`;
+            return p;
+          }
+          // If no remote path configured, place the file in the tracked working directory.
+          const remotePath = expandTilde(rawRemotePath || `${trackedCwd}/${fileName}`);
+          commandText = `upload: ${fileName} → ${remotePath}`;
+
+          // ── Validate inputs ──────────────────────────────────────────────────
+          if (!data.local_file_id) {
+            throw new Error("No file configured for this Upload File node. Open the node and select a file.");
+          }
+
+          // Read the stored file (prevents path traversal via path.basename)
+          const uploadsDir = path.join(process.cwd(), ".workflow-uploads");
+          const safeId = path.basename(data.local_file_id);
+          const localFilePath = path.join(uploadsDir, safeId);
+          if (!existsSync(localFilePath)) {
+            throw new Error(`Uploaded file not found: ${fileName}. Re-open the node and re-select the file.`);
+          }
+
+          const fileBytes = await readFile(localFilePath);
+          const fileSizeKB = (fileBytes.length / 1024).toFixed(1);
+
+          await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1mupload ${fileName} (${fileSizeKB} KB) \u2192 ${remotePath}\x1b[0m\r\n`);
+
+          // ── Transfer via base64 + exec (no SFTP dependency) ──────────────────
+          const b64 = fileBytes.toString("base64");
+          const tmpFile = `/tmp/_sm_upload_${execId.replace(/-/g, "").slice(0, 12)}_${node.id.replace(/-/g, "").slice(0, 8)}`;
+
+          if (b64.length === 0) {
+            // Empty file — just touch the destination (double-quoted path for $HOME expansion)
+            const touchRes = await ipcFetch("/exec", {
+              method: "POST",
+              body: JSON.stringify({ command: `touch "${remotePath}"`, timeout_sec: 10 }),
+            });
+            const touchResult = await touchRes.json();
+            if (!touchRes.ok || (touchResult.exit_code !== undefined && touchResult.exit_code !== 0)) {
+              throw new Error(touchResult.stderr || touchResult.detail || `Failed to create file: ${remotePath}`);
+            }
+            output = `Created empty file at ${remotePath}`;
+          } else {
+            const CHUNK_SIZE = 65536; // 64 KB of base64 per exec call (~48 KB binary)
+            const totalChunks = Math.ceil(b64.length / CHUNK_SIZE);
+            await sendToTerminal(`\x1b[2mTransferring ${totalChunks} chunk(s)...\x1b[0m\r\n`);
+
+            // Write chunks to a temp file on the remote
+            for (let i = 0; i < totalChunks; i++) {
+              const chunk = b64.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
+              const op = i === 0 ? ">" : ">>";
+              // printf '%s' avoids echo adding a newline; base64 alphabet has no single-quotes
+              const chunkCmd = `printf '%s' '${chunk}' ${op} ${tmpFile}`;
+              const chunkRes = await ipcFetch("/exec", {
+                method: "POST",
+                body: JSON.stringify({ command: chunkCmd, timeout_sec: 30 }),
+              });
+              const chunkResult = await chunkRes.json();
+              if (!chunkRes.ok || (chunkResult.exit_code !== undefined && chunkResult.exit_code !== 0)) {
+                throw new Error(chunkResult.stderr || chunkResult.detail || `Chunk ${i + 1}/${totalChunks} write failed`);
+              }
+            }
+
+            // Ensure parent directory exists, then decode base64 → final file.
+            // Use double-quoted paths so $HOME expands correctly.
+            const remoteDir = remotePath.includes("/") ? remotePath.substring(0, remotePath.lastIndexOf("/")) : "";
+            const mkdirCmd = remoteDir ? `mkdir -p "${remoteDir}" && ` : "";
+            const decodeCmd = `${mkdirCmd}base64 -d ${tmpFile} > "${remotePath}" && rm -f ${tmpFile}`;
+            await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1m${decodeCmd}\x1b[0m\r\n`);
+
+            const decRes = await ipcFetch("/exec", {
+              method: "POST",
+              body: JSON.stringify({ command: decodeCmd, timeout_sec: 60 }),
+            });
+            const decResult = await decRes.json();
+            const decOut = [decResult.stdout || "", decResult.stderr || ""].filter((s) => s.trim()).join("\n");
+            if (decOut) await sendToTerminal(`${decOut}\r\n`);
+            if (!decRes.ok || (decResult.exit_code !== undefined && decResult.exit_code !== 0)) {
+              // Clean up tmpFile if decode failed
+              await ipcFetch("/exec", {
+                method: "POST",
+                body: JSON.stringify({ command: `rm -f ${tmpFile}`, timeout_sec: 10 }),
+              }).catch(() => {});
+              throw new Error(decResult.stderr || decResult.detail || `File decode failed at ${remotePath}`);
+            }
+
+            output = `Uploaded ${fileName} (${fileSizeKB} KB) to ${remotePath}`;
+            await sendToTerminal(`\x1b[32m\u2713 ${output}\x1b[0m\r\n`);
+          }
+
+          // ── Auto-extract if configured ────────────────────────────────────────
+          if (data.extract) {
+            const rawExtractTo = data.extract_to
+              ? interpolate(data.extract_to, vars)
+              : remotePath.includes("/") ? remotePath.substring(0, remotePath.lastIndexOf("/")) : "$HOME";
+            // Expand tilde in extract_to as well
+            const extractTo = rawExtractTo.startsWith("~/") ? `$HOME/${rawExtractTo.slice(2)}` : rawExtractTo === "~" ? "$HOME" : rawExtractTo;
+            const extractCmd = `tar -xzf "${remotePath}" -C "${extractTo}"`;
+            commandText = extractCmd;
+            await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1m${extractCmd}\x1b[0m\r\n`);
+            const extRes = await ipcFetch("/exec", {
+              method: "POST",
+              body: JSON.stringify({ command: extractCmd, timeout_sec: 300 }),
+            });
+            const extResult = await extRes.json();
+            const extOut = [extResult.stdout || "", extResult.stderr || ""].filter((s) => s.trim()).join("\n");
+            if (extOut) await sendToTerminal(`${extOut}\r\n`);
+            if (!extRes.ok || (extResult.exit_code !== undefined && extResult.exit_code !== 0)) {
+              throw new Error(`Extraction failed: ${extResult.stderr || extResult.detail || `exit code ${extResult.exit_code}`}`);
+            }
+            output = `Uploaded and extracted to ${extractTo}`;
+          }
         } else if (node.type === "delay") {
           const data = node.data as DelayNodeData;
           commandText = `sleep ${data.seconds}`;

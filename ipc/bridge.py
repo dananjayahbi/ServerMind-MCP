@@ -15,6 +15,7 @@ from ipc.event_bus import get_async_queue, set_async_queue, set_running_loop
 from ipc.routes import health, logs, profiles, session, settings, terminal
 from ipc.routes import tunnel
 from ipc.routes import exec as exec_route
+from ipc.routes import upload as upload_route
 from ipc.websocket import get_ws_manager
 from shared.constants import IPC_API_PREFIX, IPC_BIND_HOST
 
@@ -78,6 +79,7 @@ app.include_router(profiles.router, prefix=IPC_API_PREFIX)
 app.include_router(logs.router, prefix=IPC_API_PREFIX)
 app.include_router(terminal.router, prefix=IPC_API_PREFIX)
 app.include_router(settings.router, prefix=IPC_API_PREFIX)
+app.include_router(upload_route.router, prefix=IPC_API_PREFIX)
 app.include_router(tunnel.router, prefix=IPC_API_PREFIX)
 app.include_router(exec_route.router, prefix=IPC_API_PREFIX)
 

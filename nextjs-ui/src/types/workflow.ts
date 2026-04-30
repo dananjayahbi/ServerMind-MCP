@@ -5,6 +5,7 @@ export type WFNodeType =
   | "command"
   | "script"
   | "file_write"
+  | "file_upload"
   | "variable"
   | "condition"
   | "delay"
@@ -48,6 +49,15 @@ export interface FileWriteNodeData {
   sudo?: boolean;
 }
 
+export interface FileUploadNodeData {
+  label: string;
+  local_file_id?: string;   // stored file key in .workflow-uploads/
+  local_file_name?: string; // original file name displayed in UI
+  remote_path?: string;     // destination path on remote server (optional — defaults to ~/filename)
+  extract?: boolean;        // auto-extract tar.gz after upload
+  extract_to?: string;      // dir to extract into (default: dirname of remote_path)
+}
+
 export interface VariableNodeData {
   label: string;
   key: string;
@@ -83,6 +93,7 @@ export type WFNodeData =
   | CommandNodeData
   | ScriptNodeData
   | FileWriteNodeData
+  | FileUploadNodeData
   | VariableNodeData
   | ConditionNodeData
   | DelayNodeData

@@ -1,5 +1,7 @@
 "use client";
-import type { WFNode, CommandNodeData, ScriptNodeData, FileWriteNodeData, VariableNodeData, DelayNodeData, NoteNodeData, TriggerNodeData, ValidationNodeData } from "@/types/workflow";
+import { useRef, useState } from "react";
+import { Upload, X, Loader2 } from "lucide-react";
+import type { WFNode, CommandNodeData, ScriptNodeData, FileWriteNodeData, FileUploadNodeData, VariableNodeData, DelayNodeData, NoteNodeData, TriggerNodeData, ValidationNodeData } from "@/types/workflow";
 
 interface Props {
   node: WFNode | null;
@@ -15,6 +17,71 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     <div>
       <label className={labelCls}>{label}</label>
       {children}
+    </div>
+  );
+}
+
+function FileUploadField({
+  fileId,
+  fileName,
+  onUpload,
+  onClear,
+}: {
+  fileId?: string;
+  fileName?: string;
+  onUpload: (fileId: string, fileName: string) => void;
+  onClear: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/workflows/upload-file", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+      onUpload(data.file_id, data.file_name);
+    } catch (err) {
+      setUploadError(String(err));
+    } finally {
+      setUploading(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  }
+
+  return (
+    <div>
+      <label className={labelCls}>Local File</label>
+      <input ref={inputRef} type="file" className="hidden" onChange={handleFile} />
+      {fileId ? (
+        <div className="flex items-center gap-2 p-2.5 rounded-lg bg-[#0D0D0D] border border-[#10B981]/30">
+          <Upload size={13} className="text-[#10B981] flex-shrink-0" />
+          <span className="text-[11px] text-[#F2F2F2] truncate flex-1">{fileName}</span>
+          <button
+            onClick={onClear}
+            className="text-[#555] hover:text-[#EF4444] transition-colors flex-shrink-0"
+          >
+            <X size={11} />
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => inputRef.current?.click()}
+          disabled={uploading}
+          className="w-full flex items-center justify-center gap-2 p-3 rounded-lg border-2 border-dashed border-[#2A2A2A] text-[#555] hover:border-[#10B981]/40 hover:text-[#10B981] transition-all text-[12px] disabled:opacity-50"
+        >
+          {uploading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+          {uploading ? "Uploading..." : "Choose File"}
+        </button>
+      )}
+      {uploadError && <p className="text-[10px] text-[#EF4444] mt-1">{uploadError}</p>}
     </div>
   );
 }
@@ -95,6 +162,44 @@ export function NodePropertiesPanel({ node, onChange }: Props) {
             <input type="checkbox" className={checkCls} checked={!!(d.sudo)} onChange={(e) => update({ sudo: e.target.checked })} />
             Use sudo (tee)
           </label>
+        </>
+      )}
+
+      {node.type === "file_upload" && (
+        <>
+          <FileUploadField
+            fileId={d.local_file_id as string | undefined}
+            fileName={d.local_file_name as string | undefined}
+            onUpload={(fileId, fileName) => update({ local_file_id: fileId, local_file_name: fileName })}
+            onClear={() => update({ local_file_id: "", local_file_name: "" })}
+          />
+          <Field label="Remote Path">
+            <input
+              className={inputCls + " font-mono"}
+              value={(d.remote_path as string) || ""}
+              onChange={(e) => update({ remote_path: e.target.value })}
+              placeholder="/home/ubuntu/app.tar.gz"
+            />
+          </Field>
+          <label className="flex items-center gap-2 text-sm text-[#A3A3A3] cursor-pointer">
+            <input
+              type="checkbox"
+              className={checkCls}
+              checked={!!(d.extract)}
+              onChange={(e) => update({ extract: e.target.checked })}
+            />
+            Auto-extract after upload (tar.gz)
+          </label>
+          {d.extract && (
+            <Field label="Extract to directory (optional)">
+              <input
+                className={inputCls + " font-mono"}
+                value={(d.extract_to as string) || ""}
+                onChange={(e) => update({ extract_to: e.target.value })}
+                placeholder="/home/ubuntu/ (default: same dir)"
+              />
+            </Field>
+          )}
         </>
       )}
 

@@ -5,10 +5,10 @@ import Link from "next/link";
 import {
   ArrowLeft, Play, Server, CheckCircle2, XCircle, Loader2, Clock,
   ChevronDown, ChevronUp, RefreshCw, GitBranch, Zap, Terminal, Code2,
-  FileCode2, Braces, StickyNote, AlertTriangle, History
+  FileCode2, Braces, StickyNote, AlertTriangle, History, ShieldCheck, Upload
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Workflow, WFVariableDef, WorkflowExecution, WFNodeLog } from "@/types/workflow";
+import type { Workflow, WFVariableDef, WorkflowExecution, WFNodeLog, WFNode, CommandNodeData, ScriptNodeData, FileWriteNodeData, FileUploadNodeData, DelayNodeData, VariableNodeData } from "@/types/workflow";
 import { useAppStore } from "@/lib/store";
 
 function nodeIcon(type: string) {
@@ -17,10 +17,48 @@ function nodeIcon(type: string) {
     case "command": return <Terminal size={12} className="text-[#F59E0B]" />;
     case "script": return <Code2 size={12} className="text-[#A78BFA]" />;
     case "file_write": return <FileCode2 size={12} className="text-[#60A5FA]" />;
+    case "file_upload": return <Upload size={12} className="text-[#49C5B6]" />;
     case "variable": return <Braces size={12} className="text-[#FB923C]" />;
     case "note": return <StickyNote size={12} className="text-[#FBBF24]" />;
     default: return <Zap size={12} className="text-[#49C5B6]" />;
   }
+}
+
+interface ValidationIssue {
+  nodeLabel: string;
+  nodeType: string;
+  issues: string[];
+}
+
+function validateWorkflow(nodes: WFNode[]): ValidationIssue[] {
+  const results: ValidationIssue[] = [];
+  for (const node of nodes) {
+    if (node.type === "trigger" || node.type === "note") continue;
+    const label = (node.data as { label: string }).label || node.type;
+    const issues: string[] = [];
+    if (node.type === "command") {
+      const d = node.data as CommandNodeData;
+      if (!d.command?.trim()) issues.push("Command is empty");
+    } else if (node.type === "script") {
+      const d = node.data as ScriptNodeData;
+      if (!d.script?.trim()) issues.push("Script is empty");
+    } else if (node.type === "file_write") {
+      const d = node.data as FileWriteNodeData;
+      if (!d.remote_path?.trim()) issues.push("Remote path is empty");
+      if (!d.content?.trim()) issues.push("Content is empty");
+    } else if (node.type === "file_upload") {
+      const d = node.data as FileUploadNodeData;
+      if (!d.local_file_id) issues.push("No file selected — open the node and pick a file to upload");
+    } else if (node.type === "delay") {
+      const d = node.data as DelayNodeData;
+      if (!d.seconds || d.seconds <= 0) issues.push("Delay must be greater than 0 seconds");
+    } else if (node.type === "variable") {
+      const d = node.data as VariableNodeData;
+      if (!d.key?.trim()) issues.push("Variable key is empty");
+    }
+    if (issues.length > 0) results.push({ nodeLabel: label, nodeType: node.type, issues });
+  }
+  return results;
 }
 
 function StatusBadge({ status }: { status: string }) {
@@ -173,6 +211,7 @@ export default function WorkflowRunPage() {
   const termPrompt = selectedProfile ? `${selectedProfile.username}@${selectedProfile.hostname}:~$` : "server:~$";
   const [pastExecutions, setPastExecutions] = useState<WorkflowExecution[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  const [validationIssues, setValidationIssues] = useState<ValidationIssue[] | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -366,6 +405,56 @@ export default function WorkflowRunPage() {
                   {requiredMissing.length} required variable{requiredMissing.length > 1 ? "s" : ""} missing:{" "}
                   {requiredMissing.map((v) => v.key).join(", ")}
                 </p>
+              </div>
+            )}
+
+            {/* Validate button */}
+            <button
+              onClick={() => setValidationIssues(validateWorkflow(workflow.nodes))}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-[#2A2A2A] bg-[#1A1A1A] text-[#A3A3A3] hover:text-[#F2F2F2] hover:border-[#3A3A3A] font-medium text-sm transition-colors"
+            >
+              <ShieldCheck size={15} />
+              Validate Nodes
+            </button>
+
+            {/* Validation results */}
+            {validationIssues !== null && (
+              <div className={cn(
+                "rounded-xl border p-3 space-y-2",
+                validationIssues.length === 0
+                  ? "bg-[#10B981]/10 border-[#10B981]/20"
+                  : "bg-[#EF4444]/5 border-[#EF4444]/20"
+              )}>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    {validationIssues.length === 0 ? (
+                      <CheckCircle2 size={13} className="text-[#10B981]" />
+                    ) : (
+                      <XCircle size={13} className="text-[#EF4444]" />
+                    )}
+                    <span className={cn("text-[12px] font-semibold",
+                      validationIssues.length === 0 ? "text-[#10B981]" : "text-[#EF4444]"
+                    )}>
+                      {validationIssues.length === 0
+                        ? "All nodes valid"
+                        : `${validationIssues.length} node${validationIssues.length > 1 ? "s" : ""} need attention`}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setValidationIssues(null)}
+                    className="text-[#555] hover:text-[#A3A3A3] text-[11px]"
+                  >✕</button>
+                </div>
+                {validationIssues.map((v, i) => (
+                  <div key={i} className="rounded-lg bg-[#0D0D0D] border border-[#2A2A2A] p-2.5">
+                    <p className="text-[11px] font-semibold text-[#F2F2F2] mb-1">{v.nodeLabel}</p>
+                    {v.issues.map((issue, j) => (
+                      <p key={j} className="text-[11px] text-[#EF4444] flex items-start gap-1">
+                        <span className="flex-shrink-0 mt-0.5">•</span>{issue}
+                      </p>
+                    ))}
+                  </div>
+                ))}
               </div>
             )}
 
