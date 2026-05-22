@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
-import { readFile } from "fs/promises";
-import { existsSync } from "fs";
+import { existsSync, statSync } from "fs";
+import { randomUUID } from "crypto";
 import { prisma } from "@/lib/prisma";
-import { ipcFetch } from "@/lib/ipc-client";
+import { ipcFetch, getIpcBase } from "@/lib/ipc-client";
 import type { WFNode, WFEdge, WFNodeLog, CommandNodeData, ScriptNodeData, FileWriteNodeData, FileUploadNodeData, DelayNodeData } from "@/types/workflow";
 
 async function sendToTerminal(text: string): Promise<void> {
@@ -243,73 +243,91 @@ async function runWorkflow(
             throw new Error(`Uploaded file not found: ${fileName}. Re-open the node and re-select the file.`);
           }
 
-          const fileBytes = await readFile(localFilePath);
-          const fileSizeKB = (fileBytes.length / 1024).toFixed(1);
+          const { size: fileSize } = statSync(localFilePath);
+          const fileSizeKB = (fileSize / 1024).toFixed(1);
 
           await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1mupload ${fileName} (${fileSizeKB} KB) \u2192 ${remotePath}\x1b[0m\r\n`);
 
-          // ── Transfer via base64 + exec (no SFTP dependency) ──────────────────
-          const b64 = fileBytes.toString("base64");
-          const tmpFile = `/tmp/_sm_upload_${execId.replace(/-/g, "").slice(0, 12)}_${node.id.replace(/-/g, "").slice(0, 8)}`;
+          // ── SFTP pipelined upload (same technique as WinSCP) ─────────────────
+          // Instead of the old base64-over-exec approach (thousands of SSH calls),
+          // we call the IPC /upload-local endpoint which passes the local file path
+          // directly to the SFTP pipelining layer — no HTTP overhead, no double
+          // buffering, typically 10–50× faster for large archives.
+          const uploadId = randomUUID();
+          const conn = getIpcBase();
+          if (!conn) throw new Error("MCP backend is not running");
 
-          if (b64.length === 0) {
-            // Empty file — just touch the destination (double-quoted path for $HOME expansion)
-            const touchRes = await ipcFetch("/exec", {
+          await sendToTerminal(`\x1b[2mStarting SFTP transfer (${fileSizeKB} KB)...\x1b[0m\r\n`);
+
+          // Run the upload and the progress poller concurrently.
+          let uploadDone = false;
+          // eslint-disable-next-line prefer-const
+          let uploadPayload: Record<string, unknown> = {};
+
+          const doUpload = async () => {
+            const res = await fetch(`${conn.url}/upload-local`, {
               method: "POST",
-              body: JSON.stringify({ command: `touch "${remotePath}"`, timeout_sec: 10 }),
+              headers: { "Content-Type": "application/json", "X-IPC-Token": conn.token },
+              // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+              // @ts-ignore – bypass Next.js fetch cache
+              cache: "no-store",
+              body: JSON.stringify({ local_path: localFilePath, remote_path: remotePath, upload_id: uploadId }),
             });
-            const touchResult = await touchRes.json();
-            if (!touchRes.ok || (touchResult.exit_code !== undefined && touchResult.exit_code !== 0)) {
-              throw new Error(touchResult.stderr || touchResult.detail || `Failed to create file: ${remotePath}`);
+            uploadPayload = (await res.json()) as Record<string, unknown>;
+            uploadDone = true;
+          };
+
+          const pollProgress = async () => {
+            while (!uploadDone) {
+              await new Promise<void>((r) => setTimeout(r, 1500));
+              if (uploadDone) break;
+              try {
+                const pRes = await fetch(`${conn.url}/upload/${uploadId}/progress`, {
+                  headers: { "X-IPC-Token": conn.token },
+                  cache: "no-store",
+                } as RequestInit);
+                if (pRes.ok) {
+                  const p = (await pRes.json()) as {
+                    bytes_sent: number;
+                    total_bytes: number;
+                    throughput_kbps?: number;
+                    done: boolean;
+                  };
+                  if (p.total_bytes > 0 && !p.done) {
+                    const pct = Math.round((p.bytes_sent / p.total_bytes) * 100);
+                    const sentMB = (p.bytes_sent / 1024 / 1024).toFixed(1);
+                    const totalMB = (p.total_bytes / 1024 / 1024).toFixed(1);
+                    const kbps = p.throughput_kbps ? ` @ ${Math.round(p.throughput_kbps)} KB/s` : "";
+                    const filled = Math.floor(pct / 5);
+                    const bar = "\u2588".repeat(filled) + "\u2591".repeat(20 - filled);
+                    const progressText = `[${bar}] ${pct}%  ${sentMB} / ${totalMB} MB${kbps}`;
+                    const idx = logs.findIndex((l) => l.node_id === node.id);
+                    if (idx >= 0) {
+                      logs[idx] = { ...logs[idx], output: progressText };
+                      await prisma.workflowExecution.update({
+                        where: { id: execId },
+                        data: { logs: JSON.stringify(logs) },
+                      });
+                    }
+                  }
+                }
+              } catch { /* poll errors are non-critical */ }
             }
-            output = `Created empty file at ${remotePath}`;
-          } else {
-            const CHUNK_SIZE = 65536; // 64 KB of base64 per exec call (~48 KB binary)
-            const totalChunks = Math.ceil(b64.length / CHUNK_SIZE);
-            await sendToTerminal(`\x1b[2mTransferring ${totalChunks} chunk(s)...\x1b[0m\r\n`);
+          };
 
-            // Write chunks to a temp file on the remote
-            for (let i = 0; i < totalChunks; i++) {
-              const chunk = b64.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE);
-              const op = i === 0 ? ">" : ">>";
-              // printf '%s' avoids echo adding a newline; base64 alphabet has no single-quotes
-              const chunkCmd = `printf '%s' '${chunk}' ${op} ${tmpFile}`;
-              const chunkRes = await ipcFetch("/exec", {
-                method: "POST",
-                body: JSON.stringify({ command: chunkCmd, timeout_sec: 30 }),
-              });
-              const chunkResult = await chunkRes.json();
-              if (!chunkRes.ok || (chunkResult.exit_code !== undefined && chunkResult.exit_code !== 0)) {
-                throw new Error(chunkResult.stderr || chunkResult.detail || `Chunk ${i + 1}/${totalChunks} write failed`);
-              }
-            }
+          await Promise.all([doUpload(), pollProgress()]);
 
-            // Ensure parent directory exists, then decode base64 → final file.
-            // Use double-quoted paths so $HOME expands correctly.
-            const remoteDir = remotePath.includes("/") ? remotePath.substring(0, remotePath.lastIndexOf("/")) : "";
-            const mkdirCmd = remoteDir ? `mkdir -p "${remoteDir}" && ` : "";
-            const decodeCmd = `${mkdirCmd}base64 -d ${tmpFile} > "${remotePath}" && rm -f ${tmpFile}`;
-            await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1m${decodeCmd}\x1b[0m\r\n`);
-
-            const decRes = await ipcFetch("/exec", {
-              method: "POST",
-              body: JSON.stringify({ command: decodeCmd, timeout_sec: 60 }),
-            });
-            const decResult = await decRes.json();
-            const decOut = [decResult.stdout || "", decResult.stderr || ""].filter((s) => s.trim()).join("\n");
-            if (decOut) await sendToTerminal(`${decOut}\r\n`);
-            if (!decRes.ok || (decResult.exit_code !== undefined && decResult.exit_code !== 0)) {
-              // Clean up tmpFile if decode failed
-              await ipcFetch("/exec", {
-                method: "POST",
-                body: JSON.stringify({ command: `rm -f ${tmpFile}`, timeout_sec: 10 }),
-              }).catch(() => {});
-              throw new Error(decResult.stderr || decResult.detail || `File decode failed at ${remotePath}`);
-            }
-
-            output = `Uploaded ${fileName} (${fileSizeKB} KB) to ${remotePath}`;
-            await sendToTerminal(`\x1b[32m\u2713 ${output}\x1b[0m\r\n`);
+          if (!uploadPayload.success) {
+            throw new Error(
+              (uploadPayload as { error?: string }).error || "SFTP upload failed"
+            );
           }
+
+          const elapsed = uploadPayload.elapsed_seconds as number | undefined;
+          const kbps = uploadPayload.throughput_kbps as number | undefined;
+          const speedInfo = elapsed && kbps ? ` in ${elapsed.toFixed(1)}s @ ${Math.round(kbps)} KB/s` : "";
+          output = `Uploaded ${fileName} (${fileSizeKB} KB) \u2192 ${remotePath}${speedInfo}`;
+          await sendToTerminal(`\x1b[32m\u2713 ${output}\x1b[0m\r\n`);
 
           // ── Auto-extract if configured ────────────────────────────────────────
           if (data.extract) {

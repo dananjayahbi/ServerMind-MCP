@@ -366,9 +366,22 @@ class SessionManager:
 
         return result
 
-    def upload_file(self, local_path: str, remote_path: str) -> dict:
-        """Upload a local file to the remote server via SFTP."""
+    def upload_file(
+        self,
+        local_path: str,
+        remote_path: str,
+        progress_callback: "Callable[[int, int], None] | None" = None,
+    ) -> dict:
+        """Upload a local file to the remote server via SFTP.
+
+        Uses SFTP write pipelining (same technique as WinSCP) which is
+        significantly faster than the default sequential ``sftp.put()`` on
+        high-latency links — typically 5–20× faster for large files such as
+        tar archives.  See :mod:`ssh.sftp_transfer` for details.
+        """
         import os
+        from ssh.sftp_transfer import sftp_put_pipelined
+
         active = self._registry.get_exposed()
         if not active:
             return {"success": False, "error": "No active SSH session. Use server_expose first."}
@@ -381,15 +394,33 @@ class SessionManager:
             return {"success": False, "error": f"Local file not found: {local_path}"}
 
         try:
-            file_size = os.path.getsize(local_path)
             sftp = client.open_sftp()
-            sftp.put(local_path, remote_path)
-            sftp.close()
+            try:
+                # Resolve $HOME / ~ to the actual SFTP home directory.
+                # trackedCwd in the Next.js workflow runner uses "$HOME" as a
+                # sentinel when no explicit cd has been issued; SFTP does not
+                # expand shell variables, so we substitute it here.
+                if "$HOME" in remote_path or remote_path.startswith("~"):
+                    home_dir = sftp.normalize(".")
+                    remote_path = remote_path.replace("$HOME", home_dir)
+                    if remote_path.startswith("~/"):
+                        remote_path = home_dir + "/" + remote_path[2:]
+                    elif remote_path == "~":
+                        remote_path = home_dir
+
+                bytes_transferred = sftp_put_pipelined(
+                    sftp,
+                    local_path,
+                    remote_path,
+                    progress_callback=progress_callback,
+                )
+            finally:
+                sftp.close()
             return {
                 "success": True,
                 "local_path": local_path,
                 "remote_path": remote_path,
-                "bytes_transferred": file_size,
+                "bytes_transferred": bytes_transferred,
             }
         except Exception as exc:
             return {"success": False, "error": str(exc)}

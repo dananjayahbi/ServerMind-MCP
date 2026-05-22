@@ -80,12 +80,20 @@ function StatusBadge({ status }: { status: string }) {
 function NodeLogRow({ log }: { log: WFNodeLog }) {
   const [expanded, setExpanded] = useState(false);
   const hasOutput = !!(log.output || log.error);
+
+  // Detect upload progress format: "[████████░░░░] 75%  50.3 / 67.2 MB @ 4096 KB/s"
+  const progressMatch =
+    log.status === "running" && log.output
+      ? log.output.match(/^\[([█░]+)\]\s+(\d+)%\s+([\d.]+)\s*\/\s*([\d.]+)\s*MB(.*)/)
+      : null;
+  const isRunningWithProgress = log.status === "running" && !!log.output;
+
   return (
     <div className={cn(
       "rounded-xl border transition-all",
       log.status === "failed" ? "border-[#EF4444]/30 bg-[#1A0808]" :
       log.status === "success" ? "border-[#10B981]/20 bg-[#081A10]" :
-      log.status === "running" ? "border-[#49C5B6]/30 bg-[#081A18] animate-pulse" :
+      log.status === "running" ? "border-[#49C5B6]/30 bg-[#081A18]" :
       "border-[#2A2A2A] bg-[#111111]"
     )}>
       <div className="flex items-center gap-3 px-4 py-3">
@@ -103,13 +111,39 @@ function NodeLogRow({ log }: { log: WFNodeLog }) {
             {((new Date(log.completed_at).getTime() - new Date(log.started_at).getTime()) / 1000).toFixed(1)}s
           </span>
         )}
-        {hasOutput && (
+        {hasOutput && !isRunningWithProgress && (
           <button onClick={() => setExpanded((v) => !v)} className="text-[#555] hover:text-[#A3A3A3] transition-colors">
             {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
         )}
       </div>
-      {expanded && hasOutput && (
+
+      {/* Live progress bar for in-flight uploads */}
+      {progressMatch ? (
+        <div className="px-4 pb-3">
+          <div className="mb-1.5 flex items-center justify-between text-[10px]">
+            <span className="text-[#A3A3A3] font-mono">
+              {progressMatch[3]} / {progressMatch[4]} MB
+              {progressMatch[5]?.trim() ? (
+                <span className="text-[#49C5B6]"> {progressMatch[5].trim()}</span>
+              ) : null}
+            </span>
+            <span className="text-[#49C5B6] font-bold">{progressMatch[2]}%</span>
+          </div>
+          <div className="h-2 w-full rounded-full bg-[#0D0D0D] overflow-hidden">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-[#10B981] to-[#49C5B6] transition-all duration-700"
+              style={{ width: `${progressMatch[2]}%` }}
+            />
+          </div>
+        </div>
+      ) : isRunningWithProgress ? (
+        <div className="px-4 pb-2">
+          <pre className="text-[11px] text-[#49C5B6] font-mono whitespace-pre-wrap break-all">{log.output}</pre>
+        </div>
+      ) : null}
+
+      {expanded && hasOutput && !isRunningWithProgress && (
         <div className="px-4 pb-3">
           {log.output && (
             <pre className="rounded-lg bg-[#0D0D0D] p-3 text-[11px] text-[#A3A3A3] font-mono overflow-x-auto max-h-40 whitespace-pre-wrap break-all">
