@@ -5,10 +5,11 @@ import Link from "next/link";
 import {
   ArrowLeft, Play, Server, CheckCircle2, XCircle, Loader2, Clock,
   ChevronDown, ChevronUp, RefreshCw, GitBranch, Zap, Terminal, Code2,
-  FileCode2, Braces, StickyNote, AlertTriangle, History, ShieldCheck, Upload
+  FileCode2, Braces, StickyNote, AlertTriangle, History, ShieldCheck, Upload,
+  HammerIcon, FolderOpen
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { Workflow, WFVariableDef, WorkflowExecution, WFNodeLog, WFNode, CommandNodeData, ScriptNodeData, FileWriteNodeData, FileUploadNodeData, DelayNodeData, VariableNodeData } from "@/types/workflow";
+import type { Workflow, WFVariableDef, WorkflowExecution, WFNodeLog, WFNode, CommandNodeData, ScriptNodeData, FileWriteNodeData, FileUploadNodeData, DelayNodeData, VariableNodeData, LocalBuildNodeData, LocalPathUploadNodeData } from "@/types/workflow";
 import { useAppStore } from "@/lib/store";
 
 function nodeIcon(type: string) {
@@ -18,6 +19,8 @@ function nodeIcon(type: string) {
     case "script": return <Code2 size={12} className="text-[#A78BFA]" />;
     case "file_write": return <FileCode2 size={12} className="text-[#60A5FA]" />;
     case "file_upload": return <Upload size={12} className="text-[#49C5B6]" />;
+    case "local_build": return <HammerIcon size={12} className="text-[#E879F9]" />;
+    case "local_path_upload": return <FolderOpen size={12} className="text-[#38BDF8]" />;
     case "variable": return <Braces size={12} className="text-[#FB923C]" />;
     case "note": return <StickyNote size={12} className="text-[#FBBF24]" />;
     default: return <Zap size={12} className="text-[#49C5B6]" />;
@@ -49,6 +52,12 @@ function validateWorkflow(nodes: WFNode[]): ValidationIssue[] {
     } else if (node.type === "file_upload") {
       const d = node.data as FileUploadNodeData;
       if (!d.local_file_id) issues.push("No file selected — open the node and pick a file to upload");
+    } else if (node.type === "local_build") {
+      const d = node.data as LocalBuildNodeData;
+      if (!d.command?.trim()) issues.push("Build command is empty");
+    } else if (node.type === "local_path_upload") {
+      const d = node.data as LocalPathUploadNodeData;
+      if (!d.local_path?.trim()) issues.push("Local file path is not configured");
     } else if (node.type === "delay") {
       const d = node.data as DelayNodeData;
       if (!d.seconds || d.seconds <= 0) issues.push("Delay must be greater than 0 seconds");
@@ -313,7 +322,11 @@ export default function WorkflowRunPage() {
         setExecution({ id: data.execution_id, workflow_id: id, profile_id: selectedSessionUuid || null, status: "running", variables: vars, logs: [], started_at: new Date().toISOString() });
       } else {
         const err = await res.json();
-        alert(err.error || "Failed to start workflow");
+        const details = (err.details as string[] | undefined);
+        const msg = details?.length
+          ? `${err.error}\n\n${details.join("\n")}`
+          : err.error || "Failed to start workflow";
+        alert(msg);
         setRunning(false);
       }
     } catch (e) {

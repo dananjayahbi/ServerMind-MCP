@@ -6,6 +6,8 @@ export type WFNodeType =
   | "script"
   | "file_write"
   | "file_upload"
+  | "local_path_upload"
+  | "local_build"
   | "variable"
   | "condition"
   | "delay"
@@ -58,6 +60,22 @@ export interface FileUploadNodeData {
   extract_to?: string;      // dir to extract into (default: dirname of remote_path)
 }
 
+export interface LocalPathUploadNodeData {
+  label: string;
+  local_path: string;    // absolute path on the local machine (e.g. C:\builds\app.tar.gz)
+  remote_path?: string;  // destination path on remote server
+  extract?: boolean;     // auto-extract tar.gz after upload
+  extract_to?: string;   // dir to extract into
+}
+
+export interface LocalBuildNodeData {
+  label: string;
+  command: string;       // CMD/shell command to run locally
+  working_directory?: string; // local working directory
+  timeout?: number;      // seconds (default 300)
+  continue_on_error?: boolean;
+}
+
 export interface VariableNodeData {
   label: string;
   key: string;
@@ -94,6 +112,8 @@ export type WFNodeData =
   | ScriptNodeData
   | FileWriteNodeData
   | FileUploadNodeData
+  | LocalPathUploadNodeData
+  | LocalBuildNodeData
   | VariableNodeData
   | ConditionNodeData
   | DelayNodeData

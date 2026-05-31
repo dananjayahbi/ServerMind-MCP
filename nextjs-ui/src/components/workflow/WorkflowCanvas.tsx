@@ -25,6 +25,8 @@ import { CommandNode } from "./nodes/CommandNode";
 import { ScriptNode } from "./nodes/ScriptNode";
 import { FileWriteNode } from "./nodes/FileWriteNode";
 import { FileUploadNode } from "./nodes/FileUploadNode";
+import { LocalBuildNode } from "./nodes/LocalBuildNode";
+import { LocalPathUploadNode } from "./nodes/LocalPathUploadNode";
 import { VariableNode } from "./nodes/VariableNode";
 import { DelayNode } from "./nodes/DelayNode";
 import { NoteNode } from "./nodes/NoteNode";
@@ -37,6 +39,8 @@ const nodeTypes = {
   script: ScriptNode,
   file_write: FileWriteNode,
   file_upload: FileUploadNode,
+  local_build: LocalBuildNode,
+  local_path_upload: LocalPathUploadNode,
   variable: VariableNode,
   delay: DelayNode,
   note: NoteNode,
@@ -136,6 +140,8 @@ function defaultNodeData(type: WFNodeType): WFNode["data"] {
     case "script": return { label: "Script", script: "", timeout: 600, continue_on_error: false };
     case "file_write": return { label: "Write File", remote_path: "", content: "", sudo: false };
     case "file_upload": return { label: "Upload File", local_file_id: "", local_file_name: "", remote_path: "", extract: false, extract_to: "" };
+    case "local_build": return { label: "Local Build", command: "", working_directory: "", timeout: 300, continue_on_error: false };
+    case "local_path_upload": return { label: "Path Upload", local_path: "", remote_path: "", extract: false, extract_to: "" };
     case "variable": return { label: "Set Variable", key: "", value: "" };
     case "delay": return { label: "Delay", seconds: 5 };
     case "note": return { label: "Note", text: "" };

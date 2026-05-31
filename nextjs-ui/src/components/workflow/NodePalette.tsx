@@ -1,5 +1,5 @@
 "use client";
-import { Zap, Terminal, Code2, FileCode2, Braces, Clock, StickyNote, ShieldCheck, Upload } from "lucide-react";
+import { Zap, Terminal, Code2, FileCode2, Braces, Clock, StickyNote, ShieldCheck, Upload, FolderOpen, HammerIcon } from "lucide-react";
 
 const NODE_TYPES = [
   {
@@ -10,6 +10,13 @@ const NODE_TYPES = [
       { type: "script", label: "Script", desc: "Multi-line bash script", icon: Code2, color: "#A78BFA" },
       { type: "file_write", label: "Write File", desc: "Write file to remote", icon: FileCode2, color: "#60A5FA" },
       { type: "file_upload", label: "Upload File", desc: "Upload local file via SFTP", icon: Upload, color: "#10B981" },
+    ],
+  },
+  {
+    group: "Local",
+    items: [
+      { type: "local_build", label: "Local Build", desc: "Run command on local machine", icon: HammerIcon, color: "#E879F9" },
+      { type: "local_path_upload", label: "Path Upload", desc: "Upload file from local path", icon: FolderOpen, color: "#38BDF8" },
     ],
   },
   {

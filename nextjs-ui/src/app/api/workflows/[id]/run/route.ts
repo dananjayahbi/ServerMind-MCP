@@ -4,7 +4,7 @@ import { existsSync, statSync } from "fs";
 import { randomUUID } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { ipcFetch, getIpcBase } from "@/lib/ipc-client";
-import type { WFNode, WFEdge, WFNodeLog, CommandNodeData, ScriptNodeData, FileWriteNodeData, FileUploadNodeData, DelayNodeData } from "@/types/workflow";
+import type { WFNode, WFEdge, WFNodeLog, CommandNodeData, ScriptNodeData, FileWriteNodeData, FileUploadNodeData, DelayNodeData, LocalBuildNodeData, LocalPathUploadNodeData } from "@/types/workflow";
 
 async function sendToTerminal(text: string): Promise<void> {
   try {
@@ -35,6 +35,29 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const nodes: WFNode[] = JSON.parse(wf.nodes);
   const edges: WFEdge[] = JSON.parse(wf.edges);
+
+  // Pre-execution validation: check local paths for local_path_upload nodes
+  const localPathErrors: string[] = [];
+  for (const node of nodes) {
+    if (node.type === "local_path_upload") {
+      const data = node.data as LocalPathUploadNodeData;
+      const localPath = (data.local_path || "").trim();
+      if (!localPath) {
+        localPathErrors.push(`Node "${data.label}": no local path configured.`);
+        continue;
+      }
+      const resolvedPath = path.resolve(localPath);
+      if (!existsSync(resolvedPath)) {
+        localPathErrors.push(`Node "${data.label}": file not found at ${resolvedPath}`);
+      }
+    }
+  }
+  if (localPathErrors.length > 0) {
+    return NextResponse.json(
+      { error: "Pre-flight validation failed", details: localPathErrors },
+      { status: 422 }
+    );
+  }
 
   // Create execution record (store session_uuid in profile_id field for display purposes)
   const execution = await prisma.workflowExecution.create({
@@ -367,6 +390,143 @@ async function runWorkflow(
           await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1m${commandText}\x1b[0m\r\n`);
           await new Promise((r) => setTimeout(r, data.seconds * 1000));
           output = `Waited ${data.seconds}s`;
+        } else if (node.type === "local_build") {
+          const data = node.data as LocalBuildNodeData;
+          commandText = interpolate(data.command, vars);
+          const cwd = data.working_directory ? interpolate(data.working_directory, vars) : undefined;
+          const cwdLabel = cwd ? ` (in ${cwd})` : "";
+          await sendToTerminal(`\x1b[35m[local]\x1b[0m \x1b[1m${commandText}\x1b[0m${cwdLabel}\r\n`);
+
+          const localExecRes = await fetch(`${process.env.NEXTAUTH_URL || "http://localhost:3000"}/api/local-exec`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ command: commandText, working_directory: cwd, timeout_sec: data.timeout || 300 }),
+          });
+          const localResult = await localExecRes.json() as { stdout?: string; stderr?: string; error?: string; exit_code?: number };
+          const _localStdout = localResult.stdout || "";
+          const _localStderr = localResult.stderr || "";
+          output = [_localStdout, _localStderr].filter((s) => s.trim()).join("\n");
+          if (output) await sendToTerminal(`${output}\r\n`);
+          if (!localExecRes.ok && !data.continue_on_error) {
+            throw new Error(localResult.error || `Local build failed (exit code ${localResult.exit_code ?? "?"})`);
+          }
+        } else if (node.type === "local_path_upload") {
+          const data = node.data as LocalPathUploadNodeData;
+          const localPath = interpolate(data.local_path || "", vars).trim();
+
+          if (!localPath) {
+            throw new Error("No local path configured for this Path Upload node. Open the node and set the local file path.");
+          }
+
+          // Validate the file exists before attempting upload
+          const resolvedLocalPath = path.resolve(localPath);
+          if (!existsSync(resolvedLocalPath)) {
+            throw new Error(`Local file not found: ${resolvedLocalPath}. Ensure the file exists before running the workflow.`);
+          }
+
+          const stat = statSync(resolvedLocalPath);
+          if (!stat.isFile()) {
+            throw new Error(`Local path is not a file: ${resolvedLocalPath}`);
+          }
+
+          const fileName = path.basename(resolvedLocalPath);
+          const fileSizeKB = (stat.size / 1024).toFixed(1);
+
+          // Resolve remote path
+          const rawRemotePath = data.remote_path ? interpolate(data.remote_path, vars).trim() : "";
+          function expandTilde(p: string) {
+            if (p === "~") return "$HOME";
+            if (p.startsWith("~/")) return `$HOME/${p.slice(2)}`;
+            return p;
+          }
+          const remotePath = expandTilde(rawRemotePath || `${trackedCwd}/${fileName}`);
+          commandText = `upload (path): ${fileName} → ${remotePath}`;
+
+          await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1mupload ${fileName} (${fileSizeKB} KB) \u2192 ${remotePath}\x1b[0m\r\n`);
+
+          const uploadId = randomUUID();
+          const conn = getIpcBase();
+          if (!conn) throw new Error("MCP backend is not running");
+
+          await sendToTerminal(`\x1b[2mStarting SFTP transfer (${fileSizeKB} KB)...\x1b[0m\r\n`);
+
+          let uploadDone = false;
+          let uploadPayload: Record<string, unknown> = {};
+
+          const doUpload = async () => {
+            const res = await fetch(`${conn.url}${uploadPath}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-IPC-Token": conn.token },
+              // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+              // @ts-ignore
+              cache: "no-store",
+              body: JSON.stringify({ local_path: resolvedLocalPath, remote_path: remotePath, upload_id: uploadId }),
+            });
+            uploadPayload = (await res.json()) as Record<string, unknown>;
+            uploadDone = true;
+          };
+
+          const pollProgress = async () => {
+            while (!uploadDone) {
+              await new Promise<void>((r) => setTimeout(r, 1500));
+              if (uploadDone) break;
+              try {
+                const pRes = await fetch(`${conn.url}/upload/${uploadId}/progress`, {
+                  headers: { "X-IPC-Token": conn.token },
+                  cache: "no-store",
+                } as RequestInit);
+                if (pRes.ok) {
+                  const p = (await pRes.json()) as { bytes_sent: number; total_bytes: number; throughput_kbps?: number; done: boolean };
+                  if (p.total_bytes > 0 && !p.done) {
+                    const pct = Math.round((p.bytes_sent / p.total_bytes) * 100);
+                    const sentMB = (p.bytes_sent / 1024 / 1024).toFixed(1);
+                    const totalMB = (p.total_bytes / 1024 / 1024).toFixed(1);
+                    const kbps = p.throughput_kbps ? ` @ ${Math.round(p.throughput_kbps)} KB/s` : "";
+                    const filled = Math.floor(pct / 5);
+                    const bar = "\u2588".repeat(filled) + "\u2591".repeat(20 - filled);
+                    const progressText = `[${bar}] ${pct}%  ${sentMB} / ${totalMB} MB${kbps}`;
+                    const idx = logs.findIndex((l) => l.node_id === node.id);
+                    if (idx >= 0) {
+                      logs[idx] = { ...logs[idx], output: progressText };
+                      await prisma.workflowExecution.update({ where: { id: execId }, data: { logs: JSON.stringify(logs) } });
+                    }
+                  }
+                }
+              } catch { /* poll errors are non-critical */ }
+            }
+          };
+
+          await Promise.all([doUpload(), pollProgress()]);
+
+          if (!uploadPayload.success) {
+            throw new Error((uploadPayload as { error?: string }).error || "SFTP upload failed");
+          }
+
+          const elapsed = uploadPayload.elapsed_seconds as number | undefined;
+          const kbps = uploadPayload.throughput_kbps as number | undefined;
+          const speedInfo = elapsed && kbps ? ` in ${elapsed.toFixed(1)}s @ ${Math.round(kbps)} KB/s` : "";
+          output = `Uploaded ${fileName} (${fileSizeKB} KB) \u2192 ${remotePath}${speedInfo}`;
+          await sendToTerminal(`\x1b[32m\u2713 ${output}\x1b[0m\r\n`);
+
+          // Auto-extract if configured
+          if (data.extract) {
+            const rawExtractTo = data.extract_to
+              ? interpolate(data.extract_to, vars)
+              : remotePath.includes("/") ? remotePath.substring(0, remotePath.lastIndexOf("/")) : "$HOME";
+            const extractTo = rawExtractTo.startsWith("~/") ? `$HOME/${rawExtractTo.slice(2)}` : rawExtractTo === "~" ? "$HOME" : rawExtractTo;
+            const extractCmd = `tar -xzf "${remotePath}" -C "${extractTo}"`;
+            commandText = extractCmd;
+            await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1m${extractCmd}\x1b[0m\r\n`);
+            const extractRes = await ipcFetch(execPath, {
+              method: "POST",
+              body: JSON.stringify({ command: extractCmd, timeout_sec: 120 }),
+            });
+            const extractResult = await extractRes.json();
+            const extractOut = [extractResult.stdout || "", extractResult.stderr || ""].filter((s) => s.trim()).join("\n");
+            if (extractOut) await sendToTerminal(`${extractOut}\r\n`);
+            if (!extractRes.ok) throw new Error(extractResult.detail || extractResult.error || "Extract failed");
+            output += ` | extracted to ${extractTo}`;
+          }
         } else if (node.type === "variable") {
           const data = node.data as { key: string; value: string; label: string };
           vars[data.key] = interpolate(data.value, vars);
