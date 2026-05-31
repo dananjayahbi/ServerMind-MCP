@@ -2,6 +2,18 @@
 import { create } from "zustand";
 import type { SessionStatus, LogEntry, ServerProfile, AppSettings } from "@/types/api";
 
+export interface WorkflowConnection {
+  session_uuid: string;
+  profile_id: string | null;
+  display_name: string;
+  hostname: string;
+  username: string;
+  state: "CONNECTING" | "CONNECTED" | "DISCONNECTED" | "FAULT";
+  connected_at: string | null;
+  error: string | null;
+  is_mcp_session: boolean;
+}
+
 interface AppStore {
   // Session
   session: SessionStatus | null;
@@ -36,6 +48,10 @@ interface AppStore {
   ipcToken: string | null;
   ipcPort: number;
   setIpcCredentials: (token: string, port: number) => void;
+
+  // Workflow server connections
+  workflowConnections: WorkflowConnection[];
+  setWorkflowConnections: (c: WorkflowConnection[]) => void;
 }
 
 export const useAppStore = create<AppStore>((set) => ({
@@ -68,4 +84,7 @@ export const useAppStore = create<AppStore>((set) => ({
   ipcToken: null,
   ipcPort: 17432,
   setIpcCredentials: (token, port) => set({ ipcToken: token, ipcPort: port }),
+
+  workflowConnections: [],
+  setWorkflowConnections: (c) => set({ workflowConnections: c }),
 }));

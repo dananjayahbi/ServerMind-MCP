@@ -24,9 +24,10 @@ function interpolate(text: string, vars: Record<string, string>): string {
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const body = await req.json();
-  const { variables: inputVars = {}, profile_id } = body as {
+  const { variables: inputVars = {}, session_uuid, profile_id } = body as {
     variables: Record<string, string>;
-    profile_id?: string;
+    session_uuid?: string | null;
+    profile_id?: string | null;
   };
 
   const wf = await prisma.workflow.findUnique({ where: { id } });
@@ -35,11 +36,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const nodes: WFNode[] = JSON.parse(wf.nodes);
   const edges: WFEdge[] = JSON.parse(wf.edges);
 
-  // Create execution record
+  // Create execution record (store session_uuid in profile_id field for display purposes)
   const execution = await prisma.workflowExecution.create({
     data: {
       workflow_id: id,
-      profile_id: profile_id || null,
+      profile_id: session_uuid || profile_id || null,
       status: "running",
       variables: JSON.stringify(inputVars),
       logs: "[]",
@@ -47,7 +48,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   });
 
   // Run in background
-  runWorkflow(execution.id, nodes, edges, inputVars, profile_id).catch(console.error);
+  runWorkflow(execution.id, nodes, edges, inputVars, session_uuid || null).catch(console.error);
 
   return NextResponse.json({ execution_id: execution.id, status: "running" }, { status: 202 });
 }
@@ -80,16 +81,25 @@ async function runWorkflow(
   nodes: WFNode[],
   edges: WFEdge[],
   vars: Record<string, string>,
-  profileId?: string | null,
+  sessionUuid?: string | null,
 ) {
   const logs: WFNodeLog[] = [];
 
-  // Resolve prompt string from profile (username@hostname:~$)
+  // Determine IPC routing paths based on whether a pool session is selected
+  const execPath = sessionUuid ? `/workflow-connections/${sessionUuid}/exec` : "/exec";
+  const uploadPath = sessionUuid ? `/workflow-connections/${sessionUuid}/upload-local` : "/upload-local";
+
+  // Resolve prompt string from session info
   let prompt = "server:~$";
-  if (profileId) {
+  if (sessionUuid) {
     try {
-      const prof = await prisma.cachedProfile.findUnique({ where: { id: profileId } });
-      if (prof) prompt = `${prof.username}@${prof.hostname}:~$`;
+      const statusRes = await ipcFetch(`/workflow-connections/${sessionUuid}/status`);
+      if (statusRes.ok) {
+        const connInfo = await statusRes.json() as { username?: string; hostname?: string };
+        if (connInfo.username && connInfo.hostname) {
+          prompt = `${connInfo.username}@${connInfo.hostname}:~$`;
+        }
+      }
     } catch { /* ignore */ }
   }
 
@@ -135,7 +145,7 @@ async function runWorkflow(
           await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1m${commandText}\x1b[0m\r\n`);
           // Prepend cd so each stateless SSH exec runs in the tracked working directory.
           const execCmd = trackedCwd === "$HOME" ? commandText : `cd "${trackedCwd}" && ${commandText}`;
-          const res = await ipcFetch("/exec", {
+          const res = await ipcFetch(execPath, {
             method: "POST",
             body: JSON.stringify({ command: execCmd, timeout_sec: data.timeout || 300 }),
           });
@@ -183,7 +193,7 @@ async function runWorkflow(
           const tmpPath = `/tmp/wf_script_${execId}_${node.id}.sh`;
           const cdPrefix = trackedCwd === "$HOME" ? "" : `cd "${trackedCwd}" && `;
           const writeCmd = `cat > ${tmpPath} << 'WFEOF'\n${script}\nWFEOF\n${cdPrefix}chmod +x ${tmpPath} && bash ${tmpPath}; rm -f ${tmpPath}`;
-          const res = await ipcFetch("/exec", {
+          const res = await ipcFetch(execPath, {
             method: "POST",
             body: JSON.stringify({ command: writeCmd, timeout_sec: data.timeout || 600 }),
           });
@@ -204,7 +214,7 @@ async function runWorkflow(
           await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1m${commandText}\x1b[0m\r\n`);
           const cdFilePrefix = trackedCwd === "$HOME" ? "" : `cd "${trackedCwd}" && `;
           const cmd = `${cdFilePrefix}${sudoPrefix}tee ${path} > /dev/null << 'WFFILEEOF'\n${content}\nWFFILEEOF`;
-          const res = await ipcFetch("/exec", {
+          const res = await ipcFetch(execPath, {
             method: "POST",
             body: JSON.stringify({ command: cmd, timeout_sec: 30 }),
           });
@@ -265,7 +275,7 @@ async function runWorkflow(
           let uploadPayload: Record<string, unknown> = {};
 
           const doUpload = async () => {
-            const res = await fetch(`${conn.url}/upload-local`, {
+            const res = await fetch(`${conn.url}${uploadPath}`, {
               method: "POST",
               headers: { "Content-Type": "application/json", "X-IPC-Token": conn.token },
               // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -339,7 +349,7 @@ async function runWorkflow(
             const extractCmd = `tar -xzf "${remotePath}" -C "${extractTo}"`;
             commandText = extractCmd;
             await sendToTerminal(`\x1b[32m${prompt}\x1b[0m \x1b[1m${extractCmd}\x1b[0m\r\n`);
-            const extRes = await ipcFetch("/exec", {
+            const extRes = await ipcFetch(execPath, {
               method: "POST",
               body: JSON.stringify({ command: extractCmd, timeout_sec: 300 }),
             });

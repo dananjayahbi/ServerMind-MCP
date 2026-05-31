@@ -2,7 +2,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppStore } from "@/lib/store";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { Terminal as TerminalIcon, Trash2, RefreshCw, Wifi, WifiOff, Copy, Check } from "lucide-react";
+import { Terminal as TerminalIcon, Trash2, RefreshCw, Wifi, WifiOff, Copy, Check, ChevronDown, Server } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 // Module-level terminal output buffer — survives component unmount/remount
 const _termBuffer: (Uint8Array | string)[] = [];
@@ -17,6 +18,7 @@ type WsState = "connecting" | "open" | "closed" | "error";
 const selectSession = (s: ReturnType<typeof useAppStore.getState>) => s.session;
 const selectToken = (s: ReturnType<typeof useAppStore.getState>) => s.ipcToken;
 const selectPort = (s: ReturnType<typeof useAppStore.getState>) => s.ipcPort;
+const selectWfConns = (s: ReturnType<typeof useAppStore.getState>) => s.workflowConnections;
 
 export default function TerminalPage() {
   const termContainerRef = useRef<HTMLDivElement>(null);
@@ -29,11 +31,37 @@ export default function TerminalPage() {
   const initDoneRef = useRef(false);
   const [wsState, setWsState] = useState<WsState>("closed");
   const [copied, setCopied] = useState(false);
+  const [showServerDropdown, setShowServerDropdown] = useState(false);
 
   const session = useAppStore(selectSession);
   const ipcToken = useAppStore(selectToken);
   const ipcPort = useAppStore(selectPort);
-  const isActive = session?.state === "CONNECTED";
+  const workflowConnections = useAppStore(selectWfConns);
+
+  // Selected session: null = MCP session, string = workflow pool session_uuid
+  const [selectedSessionUuid, setSelectedSessionUuid] = useState<string | null>(null);
+
+  const mcpConnected = session?.state === "CONNECTED";
+
+  // Build the list of selectable sessions for the dropdown
+  const connectedSessions = workflowConnections.filter(c => c.state === "CONNECTED");
+  const selectedConn = selectedSessionUuid
+    ? connectedSessions.find(c => c.session_uuid === selectedSessionUuid)
+    : null;
+
+  // If selected session disconnects, fall back to MCP
+  useEffect(() => {
+    if (selectedSessionUuid) {
+      const still = workflowConnections.find(
+        c => c.session_uuid === selectedSessionUuid && c.state === "CONNECTED"
+      );
+      if (!still) setSelectedSessionUuid(null);
+    }
+  }, [workflowConnections, selectedSessionUuid]);
+
+  const isActive = selectedSessionUuid
+    ? !!connectedSessions.find(c => c.session_uuid === selectedSessionUuid)
+    : mcpConnected;
 
   useEffect(() => {
     if (initDoneRef.current) return;
@@ -66,7 +94,6 @@ export default function TerminalPage() {
       if (termContainerRef.current) {
         term.open(termContainerRef.current);
         fit.fit();
-        // Replay buffered output so terminal shows content after navigation
         for (const chunk of _termBuffer) {
           term.write(chunk as string);
         }
@@ -99,7 +126,7 @@ export default function TerminalPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const openWs = useCallback((token: string, port: number) => {
+  const openWs = useCallback((token: string, port: number, sessionUuid: string | null) => {
     if (wsRef.current) {
       wsRef.current.onopen = null;
       wsRef.current.onclose = null;
@@ -112,10 +139,13 @@ export default function TerminalPage() {
     inputDisposableRef.current = null;
     if (keepaliveRef.current) { clearInterval(keepaliveRef.current); keepaliveRef.current = null; }
 
+    // Determine which WS endpoint to use
+    const wsUrl = sessionUuid
+      ? `ws://127.0.0.1:${port}/ws/terminal/workflow/${sessionUuid}?token=${encodeURIComponent(token)}`
+      : `ws://127.0.0.1:${port}/ws/terminal/web?token=${encodeURIComponent(token)}`;
+
     setWsState("connecting");
-    const ws = new WebSocket(
-      `ws://127.0.0.1:${port}/ws/terminal/web?token=${encodeURIComponent(token)}`
-    );
+    const ws = new WebSocket(wsUrl);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
@@ -161,7 +191,7 @@ export default function TerminalPage() {
     if (isActive && ipcToken && ipcPort) {
       const ws = wsRef.current;
       if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-        openWs(ipcToken, ipcPort);
+        openWs(ipcToken, ipcPort, selectedSessionUuid);
       }
     } else if (!isActive) {
       if (wsRef.current) {
@@ -172,7 +202,7 @@ export default function TerminalPage() {
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isActive, ipcToken, ipcPort]);
+  }, [isActive, ipcToken, ipcPort, selectedSessionUuid]);
 
   useEffect(() => {
     return () => {
@@ -182,7 +212,28 @@ export default function TerminalPage() {
   }, []);
 
   function clearTerminal() { xtermRef.current?.clear(); _termBuffer.length = 0; }
-  function reconnect() { if (ipcToken && ipcPort) openWs(ipcToken, ipcPort); }
+
+  function reconnect() {
+    if (ipcToken && ipcPort) openWs(ipcToken, ipcPort, selectedSessionUuid);
+  }
+
+  function switchSession(sessionUuid: string | null) {
+    // Clear terminal buffer and content when switching sessions
+    _termBuffer.length = 0;
+    xtermRef.current?.clear();
+    setSelectedSessionUuid(sessionUuid);
+    setShowServerDropdown(false);
+    // Force reconnect by closing current WS (the useEffect will reopen with new uuid)
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+      wsRef.current = null;
+      setWsState("closed");
+    }
+    if (ipcToken && ipcPort) {
+      setTimeout(() => openWs(ipcToken, ipcPort, sessionUuid), 50);
+    }
+  }
 
   function copyTerminal() {
     const term = xtermRef.current;
@@ -202,6 +253,15 @@ export default function TerminalPage() {
   const statusColor = wsState === "open" ? "text-[#49C5B6]" : wsState === "connecting" ? "text-yellow-400" : "text-[#666666]";
   const statusLabel = wsState === "open" ? "Connected" : wsState === "connecting" ? "Connecting..." : wsState === "error" ? "Error" : "Disconnected";
 
+  const currentSessionLabel = selectedConn
+    ? selectedConn.display_name
+    : session?.state === "CONNECTED"
+      ? "MCP Session"
+      : "No Session";
+
+  // Total selectable sessions: MCP session + workflow connections
+  const hasMultipleSessions = workflowConnections.length > 0;
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <PageHeader
@@ -209,6 +269,65 @@ export default function TerminalPage() {
         description="Interactive SSH terminal"
         actions={
           <div className="flex items-center gap-3">
+            {/* Server selector dropdown */}
+            {hasMultipleSessions && (
+              <div className="relative">
+                <button
+                  onClick={() => setShowServerDropdown(v => !v)}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#111111] border border-[#2A2A2A] hover:border-[#3A3A3A] text-[12px] text-[#A3A3A3] transition-colors"
+                >
+                  <Server size={12} className="text-[#49C5B6]" />
+                  <span className="max-w-[140px] truncate">{currentSessionLabel}</span>
+                  <ChevronDown size={12} className={cn("transition-transform", showServerDropdown && "rotate-180")} />
+                </button>
+                {showServerDropdown && (
+                  <div className="absolute right-0 top-full mt-1 bg-[#111111] border border-[#2A2A2A] rounded-xl shadow-2xl z-50 min-w-[220px] py-1 overflow-hidden">
+                    {/* MCP session option */}
+                    {mcpConnected && (
+                      <button
+                        onClick={() => switchSession(null)}
+                        className={cn(
+                          "w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-[#1A1A1A] transition-colors",
+                          !selectedSessionUuid && "bg-[#49C5B6]/10"
+                        )}
+                      >
+                        <div className="w-6 h-6 rounded bg-[#49C5B6]/10 flex items-center justify-center flex-shrink-0">
+                          <Server size={11} className="text-[#49C5B6]" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[11px] font-medium text-[#F2F2F2] truncate">MCP Session</p>
+                          <p className="text-[10px] text-[#555]">Dashboard exposed server</p>
+                        </div>
+                        {!selectedSessionUuid && <span className="text-[#49C5B6] text-[10px]">●</span>}
+                      </button>
+                    )}
+                    {/* Workflow connections */}
+                    {workflowConnections.filter(c => c.state === "CONNECTED").map((conn) => (
+                      <button
+                        key={conn.session_uuid}
+                        onClick={() => switchSession(conn.is_mcp_session ? null : conn.session_uuid)}
+                        className={cn(
+                          "w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-[#1A1A1A] transition-colors",
+                          selectedSessionUuid === conn.session_uuid && "bg-[#49C5B6]/10"
+                        )}
+                      >
+                        <div className="w-6 h-6 rounded bg-[#1A1A1A] flex items-center justify-center flex-shrink-0">
+                          <Server size={11} className="text-[#666]" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[11px] font-medium text-[#F2F2F2] truncate">{conn.display_name}</p>
+                          <p className="text-[10px] text-[#555] truncate">{conn.username}@{conn.hostname}</p>
+                        </div>
+                        {selectedSessionUuid === conn.session_uuid && !conn.is_mcp_session && (
+                          <span className="text-[#49C5B6] text-[10px]">●</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className={`flex items-center gap-1.5 text-[12px] ${statusColor}`}>
               {wsState === "open" ? <Wifi size={13} /> : <WifiOff size={13} />}
               <span>{statusLabel}</span>
@@ -228,13 +347,24 @@ export default function TerminalPage() {
           </div>
         }
       />
+
+      {/* Close dropdown on outside click */}
+      {showServerDropdown && (
+        <div className="fixed inset-0 z-40" onClick={() => setShowServerDropdown(false)} />
+      )}
+
       <div className="flex-1 overflow-hidden p-4 min-h-0">
         <div className="relative h-full rounded-xl overflow-hidden border border-[#2A2A2A] bg-[#0D0D0D]">
           {!isActive && (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#0D0D0D]/95 z-10">
               <TerminalIcon size={36} className="text-[#2A2A2A]" />
               <p className="text-[14px] text-[#666666]">No active session</p>
-              <p className="text-[12px] text-[#444444]">Expose a server from the Dashboard first</p>
+              <p className="text-[12px] text-[#444444]">
+                {workflowConnections.length > 0
+                  ? "Connect a server in Workflows or expose one from the Dashboard"
+                  : "Expose a server from the Dashboard first"
+                }
+              </p>
             </div>
           )}
           <div ref={termContainerRef} className="w-full h-full" style={{ padding: "6px 8px" }} />

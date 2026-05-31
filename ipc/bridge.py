@@ -16,6 +16,7 @@ from ipc.routes import health, logs, profiles, session, settings, terminal
 from ipc.routes import tunnel
 from ipc.routes import exec as exec_route
 from ipc.routes import upload as upload_route
+from ipc.routes import workflow_connections as workflow_connections_route
 from ipc.websocket import get_ws_manager
 from shared.constants import IPC_API_PREFIX, IPC_BIND_HOST
 
@@ -82,6 +83,7 @@ app.include_router(settings.router, prefix=IPC_API_PREFIX)
 app.include_router(upload_route.router, prefix=IPC_API_PREFIX)
 app.include_router(tunnel.router, prefix=IPC_API_PREFIX)
 app.include_router(exec_route.router, prefix=IPC_API_PREFIX)
+app.include_router(workflow_connections_route.router, prefix=IPC_API_PREFIX)
 
 
 # ------------------------------------------------------------------
@@ -189,6 +191,105 @@ async def websocket_terminal_web(websocket: WebSocket) -> None:
     finally:
         shell.remove_output_callback(_on_chunk)
         _terminal_ws_clients.discard(websocket)
+
+
+# ------------------------------------------------------------------
+# WebSocket: /ws/terminal/workflow/{session_uuid}  (workflow sessions)
+# ------------------------------------------------------------------
+
+@app.websocket("/ws/terminal/workflow/{session_uuid}")
+async def websocket_terminal_workflow(websocket: WebSocket, session_uuid: str) -> None:
+    """Bidirectional raw PTY bridge for workflow connection terminals."""
+    token = websocket.query_params.get("token", "")
+    if not validate_token(token):
+        await websocket.close(code=4001)
+        return
+
+    await websocket.accept()
+
+    # Try workflow pool first, then fall back to MCP session manager
+    from ssh.workflow_pool import get_pool as get_wf_pool
+    from ssh.session_manager import get_manager as get_ssh_manager
+
+    pool = get_wf_pool()
+    ssh_manager = get_ssh_manager()
+
+    state = ssh_manager.get_state_model()
+    if state.session_uuid == session_uuid:
+        shell = ssh_manager.get_or_open_web_shell()
+    else:
+        shell = pool.get_or_open_web_shell(session_uuid)
+
+    if shell is None:
+        await websocket.send_text(
+            f"\r\nNo connected session for {session_uuid}.\r\n"
+        )
+        await websocket.close()
+        return
+
+    loop = asyncio.get_running_loop()
+    output_queue: asyncio.Queue[bytes] = asyncio.Queue()
+
+    def _on_chunk(_cmd_id: str, chunk: str, _stream: str) -> None:
+        asyncio.run_coroutine_threadsafe(
+            output_queue.put(chunk.encode("utf-8", errors="replace")),
+            loop,
+        )
+
+    shell.add_output_callback(_on_chunk)
+
+    async def _shell_to_ws() -> None:
+        try:
+            while True:
+                data = await output_queue.get()
+                await websocket.send_bytes(data)
+        except Exception:
+            pass
+
+    async def _ws_to_shell() -> None:
+        try:
+            while True:
+                raw = await websocket.receive()
+                msg_type = raw.get("type", "")
+                if msg_type == "websocket.disconnect":
+                    break
+                data: bytes | None = None
+                if raw.get("bytes"):
+                    data = raw["bytes"]
+                elif raw.get("text"):
+                    text = raw["text"]
+                    if text.startswith("{"):
+                        try:
+                            import json as _json
+                            ctrl = _json.loads(text)
+                            if ctrl.get("type") == "resize":
+                                shell.resize(
+                                    int(ctrl.get("cols", 80)), int(ctrl.get("rows", 24))
+                                )
+                        except Exception:
+                            pass
+                        continue
+                    data = text.encode("utf-8")
+                if data and shell.is_open():
+                    data = data.replace(b"\x00", b"")
+                    if data:
+                        shell.send_input(data)
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+
+    send_task = asyncio.create_task(_shell_to_ws())
+    recv_task = asyncio.create_task(_ws_to_shell())
+    try:
+        done, pending = await asyncio.wait(
+            [send_task, recv_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for t in pending:
+            t.cancel()
+    finally:
+        shell.remove_output_callback(_on_chunk)
 
 
 @app.post(f"{IPC_API_PREFIX}/session/terminal/inject")

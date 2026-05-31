@@ -231,18 +231,19 @@ function TerminalMirror({ execution, prompt }: { execution: WorkflowExecution | 
 export default function WorkflowRunPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { profiles } = useAppStore();
+  const { workflowConnections } = useAppStore();
 
   const [workflow, setWorkflow] = useState<Workflow | null>(null);
   const [loading, setLoading] = useState(true);
   const [vars, setVars] = useState<Record<string, string>>({});
-  const [profileId, setProfileId] = useState("");
+  const [selectedSessionUuid, setSelectedSessionUuid] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [execId, setExecId] = useState<string | null>(null);
   const [execution, setExecution] = useState<WorkflowExecution | null>(null);
 
-  const selectedProfile = profiles.find((p) => p.id === profileId);
-  const termPrompt = selectedProfile ? `${selectedProfile.username}@${selectedProfile.hostname}:~$` : "server:~$";
+  const connectedSessions = workflowConnections.filter(c => c.state === "CONNECTED");
+  const selectedConn = connectedSessions.find(c => c.session_uuid === selectedSessionUuid) ?? null;
+  const termPrompt = selectedConn ? `${selectedConn.username}@${selectedConn.hostname}:~$` : "server:~$";
   const [pastExecutions, setPastExecutions] = useState<WorkflowExecution[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [validationIssues, setValidationIssues] = useState<ValidationIssue[] | null>(null);
@@ -271,9 +272,10 @@ export default function WorkflowRunPage() {
       }
     }
     load();
-    // Pre-select profile if only one
-    if (profiles.length === 1) setProfileId(profiles[0].id);
-  }, [id, profiles]);
+    // Pre-select session if only one is connected
+    if (connectedSessions.length === 1) setSelectedSessionUuid(connectedSessions[0].session_uuid);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
 
   useEffect(() => {
     if (!execId) return;
@@ -303,12 +305,12 @@ export default function WorkflowRunPage() {
       const res = await fetch(`/api/workflows/${id}/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ variables: vars, profile_id: profileId || null }),
+        body: JSON.stringify({ variables: vars, session_uuid: selectedSessionUuid }),
       });
       if (res.ok) {
         const data = await res.json();
         setExecId(data.execution_id);
-        setExecution({ id: data.execution_id, workflow_id: id, profile_id: profileId || null, status: "running", variables: vars, logs: [], started_at: new Date().toISOString() });
+        setExecution({ id: data.execution_id, workflow_id: id, profile_id: selectedSessionUuid || null, status: "running", variables: vars, logs: [], started_at: new Date().toISOString() });
       } else {
         const err = await res.json();
         alert(err.error || "Failed to start workflow");
@@ -384,21 +386,36 @@ export default function WorkflowRunPage() {
                 <Server size={11} />
                 Target Server
               </label>
-              <select
-                value={profileId}
-                onChange={(e) => setProfileId(e.target.value)}
-                className="w-full bg-[#1A1A1A] border border-[#2A2A2A] rounded-lg px-3 py-2 text-sm text-[#F2F2F2] focus:border-[#49C5B6] focus:outline-none"
-              >
-                <option value="">— Select server (optional) —</option>
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>{p.display_name} ({p.hostname})</option>
-                ))}
-              </select>
-              {!profileId && (
-                <p className="text-[10px] text-[#F59E0B] mt-1 flex items-center gap-1">
-                  <AlertTriangle size={10} />
-                  No server selected — commands will use current session
-                </p>
+              {connectedSessions.length === 0 ? (
+                <div className="rounded-lg bg-[#F59E0B]/10 border border-[#F59E0B]/20 p-3 flex items-start gap-2">
+                  <AlertTriangle size={13} className="text-[#F59E0B] flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-[12px] text-[#F59E0B] font-medium">No servers connected</p>
+                    <p className="text-[11px] text-[#A3A3A3] mt-0.5">Connect a server from the Workflows page or expose one from the Dashboard.</p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <select
+                    value={selectedSessionUuid ?? ""}
+                    onChange={(e) => setSelectedSessionUuid(e.target.value || null)}
+                    className="w-full bg-[#1A1A1A] border border-[#2A2A2A] rounded-lg px-3 py-2 text-sm text-[#F2F2F2] focus:border-[#49C5B6] focus:outline-none"
+                  >
+                    <option value="">— Select server —</option>
+                    {connectedSessions.map((c) => (
+                      <option key={c.session_uuid} value={c.session_uuid}>
+                        {c.display_name} ({c.hostname})
+                        {c.is_mcp_session ? " [MCP]" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  {!selectedSessionUuid && (
+                    <p className="text-[10px] text-[#F59E0B] mt-1 flex items-center gap-1">
+                      <AlertTriangle size={10} />
+                      No server selected — commands will use current MCP session
+                    </p>
+                  )}
+                </>
               )}
             </div>
 
@@ -546,7 +563,7 @@ export default function WorkflowRunPage() {
                         <span className="text-[11px] text-[#555]">{new Date(ex.started_at).toLocaleString()}</span>
                       </div>
                       <p className="text-[11px] text-[#555]">
-                        {ex.logs.length} steps · Profile: {ex.profile_id ? profiles.find((p) => p.id === ex.profile_id)?.display_name ?? ex.profile_id : "none"}
+                        {ex.logs.length} steps · {ex.profile_id ? workflowConnections.find(c => c.session_uuid === ex.profile_id)?.display_name ?? ex.profile_id : "no session"}
                       </p>
                     </div>
                     <ChevronDown size={14} className="text-[#555] rotate-[-90deg]" />
