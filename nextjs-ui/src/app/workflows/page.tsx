@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import {
   GitBranch, Plus, Play, Trash2, Clock, Layers, Search, RefreshCw,
   Server, LayoutGrid, List, Wifi, WifiOff, Loader2, X, CheckCircle2, AlertTriangle,
-  SplitSquareHorizontal
+  SplitSquareHorizontal, Copy
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { WorkflowSummary } from "@/types/workflow";
@@ -33,6 +33,7 @@ export default function WorkflowsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [duplicating, setDuplicating] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [showTemplates, setShowTemplates] = useState(false);
   const [templates, setTemplates] = useState<WorkflowSummary[]>([]);
@@ -148,6 +149,19 @@ export default function WorkflowsPage() {
       setWorkflows((prev) => prev.filter((w) => w.id !== id));
     } finally {
       setDeleting(null);
+    }
+  }
+
+  async function duplicateWorkflow(id: string) {
+    setDuplicating(id);
+    try {
+      const res = await fetch(`/api/workflows/${id}/duplicate`, { method: "POST" });
+      if (res.ok) {
+        const copy = await res.json();
+        setWorkflows((prev) => [copy, ...prev]);
+      }
+    } finally {
+      setDuplicating(null);
     }
   }
 
@@ -378,7 +392,7 @@ export default function WorkflowsPage() {
         {viewMode === "grid" && filtered.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
             {filtered.map((wf) => (
-              <WorkflowCard key={wf.id} wf={wf} onDelete={deleteWorkflow} deleting={deleting === wf.id} />
+              <WorkflowCard key={wf.id} wf={wf} onDelete={deleteWorkflow} deleting={deleting === wf.id} onDuplicate={duplicateWorkflow} duplicating={duplicating === wf.id} />
             ))}
           </div>
         )}
@@ -387,7 +401,7 @@ export default function WorkflowsPage() {
         {viewMode === "list" && filtered.length > 0 && (
           <div className="flex flex-col gap-2">
             {filtered.map((wf) => (
-              <WorkflowRow key={wf.id} wf={wf} onDelete={deleteWorkflow} deleting={deleting === wf.id} />
+              <WorkflowRow key={wf.id} wf={wf} onDelete={deleteWorkflow} deleting={deleting === wf.id} onDuplicate={duplicateWorkflow} duplicating={duplicating === wf.id} />
             ))}
           </div>
         )}
@@ -396,7 +410,7 @@ export default function WorkflowsPage() {
   );
 }
 
-function WorkflowCard({ wf, onDelete, deleting }: { wf: WorkflowSummary; onDelete: (id: string) => void; deleting: boolean }) {
+function WorkflowCard({ wf, onDelete, deleting, onDuplicate, duplicating }: { wf: WorkflowSummary; onDelete: (id: string) => void; deleting: boolean; onDuplicate: (id: string) => void; duplicating: boolean }) {
   return (
     <div className="group bg-[#111111] border border-[#2A2A2A] rounded-2xl p-4 hover:border-[#3A3A3A] transition-all flex flex-col gap-3">
       <div className="flex items-start justify-between gap-2">
@@ -446,6 +460,14 @@ function WorkflowCard({ wf, onDelete, deleting }: { wf: WorkflowSummary; onDelet
           Run
         </Link>
         <button
+          onClick={() => onDuplicate(wf.id)}
+          disabled={duplicating}
+          title="Duplicate workflow"
+          className="p-1.5 rounded-lg text-[#555] hover:text-[#A78BFA] hover:bg-[#A78BFA]/10 transition-colors disabled:opacity-40"
+        >
+          {duplicating ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}
+        </button>
+        <button
           onClick={() => onDelete(wf.id)}
           disabled={deleting}
           className="p-1.5 rounded-lg text-[#555] hover:text-[#EF4444] hover:bg-[#EF4444]/10 transition-colors disabled:opacity-40"
@@ -457,7 +479,7 @@ function WorkflowCard({ wf, onDelete, deleting }: { wf: WorkflowSummary; onDelet
   );
 }
 
-function WorkflowRow({ wf, onDelete, deleting }: { wf: WorkflowSummary; onDelete: (id: string) => void; deleting: boolean }) {
+function WorkflowRow({ wf, onDelete, deleting, onDuplicate, duplicating }: { wf: WorkflowSummary; onDelete: (id: string) => void; deleting: boolean; onDuplicate: (id: string) => void; duplicating: boolean }) {
   return (
     <div className="flex items-center gap-4 bg-[#111111] border border-[#2A2A2A] rounded-xl px-4 py-3 hover:border-[#3A3A3A] transition-all">
       <div className="w-8 h-8 rounded-lg bg-[#49C5B6]/10 flex items-center justify-center flex-shrink-0">
@@ -481,6 +503,14 @@ function WorkflowRow({ wf, onDelete, deleting }: { wf: WorkflowSummary; onDelete
         <Link href={`/workflows/${wf.id}/run`} className="px-3 py-1.5 rounded-lg bg-[#49C5B6]/10 hover:bg-[#49C5B6]/20 text-[#49C5B6] text-[12px] border border-[#49C5B6]/20 transition-colors flex items-center gap-1">
           <Play size={12} /> Run
         </Link>
+        <button
+          onClick={() => onDuplicate(wf.id)}
+          disabled={duplicating}
+          title="Duplicate workflow"
+          className="p-1.5 rounded-lg text-[#555] hover:text-[#A78BFA] hover:bg-[#A78BFA]/10 transition-colors disabled:opacity-40"
+        >
+          {duplicating ? <Loader2 size={14} className="animate-spin" /> : <Copy size={14} />}
+        </button>
         <button onClick={() => onDelete(wf.id)} disabled={deleting} className="p-1.5 rounded-lg text-[#555] hover:text-[#EF4444] hover:bg-[#EF4444]/10 transition-colors disabled:opacity-40">
           <Trash2 size={14} />
         </button>
