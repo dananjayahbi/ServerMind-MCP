@@ -1,5 +1,7 @@
 """JSON Schema definitions for all MCP tool input parameters."""
 
+_SESSION_UUID_PROP = {"type": "string", "minLength": 1}
+
 TOOL_SCHEMAS: dict[str, dict] = {
     "server_list_profiles": {
         "type": "object",
@@ -8,7 +10,9 @@ TOOL_SCHEMAS: dict[str, dict] = {
     },
     "server_get_session_status": {
         "type": "object",
-        "properties": {},
+        "properties": {
+            "session_uuid": _SESSION_UUID_PROP,
+        },
         "additionalProperties": False,
     },
     "server_expose": {
@@ -25,6 +29,7 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "properties": {
             "command": {"type": "string", "minLength": 1},
             "timeout_sec": {"type": "integer", "minimum": 1, "maximum": 3600},
+            "session_uuid": _SESSION_UUID_PROP,
         },
         "additionalProperties": False,
     },
@@ -34,6 +39,7 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "properties": {
             "script": {"type": "string", "minLength": 1},
             "timeout_sec": {"type": "integer", "minimum": 1, "maximum": 3600},
+            "session_uuid": _SESSION_UUID_PROP,
         },
         "additionalProperties": False,
     },
@@ -43,12 +49,15 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "properties": {
             "local_path": {"type": "string", "minLength": 1},
             "remote_path": {"type": "string", "minLength": 1},
+            "session_uuid": _SESSION_UUID_PROP,
         },
         "additionalProperties": False,
     },
     "server_connect_terminal": {
         "type": "object",
-        "properties": {},
+        "properties": {
+            "session_uuid": _SESSION_UUID_PROP,
+        },
         "additionalProperties": False,
     },
     "server_send_terminal_input": {
@@ -57,12 +66,15 @@ TOOL_SCHEMAS: dict[str, dict] = {
         "properties": {
             "input": {"type": "string"},
             "wait_ms": {"type": "integer", "minimum": 100, "maximum": 30000},
+            "session_uuid": _SESSION_UUID_PROP,
         },
         "additionalProperties": False,
     },
     "server_disconnect": {
         "type": "object",
-        "properties": {},
+        "properties": {
+            "session_uuid": _SESSION_UUID_PROP,
+        },
         "additionalProperties": False,
     },
     "server_read_log": {

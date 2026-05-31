@@ -9,6 +9,11 @@ from pydantic import BaseModel, Field
 
 class ExposeRequest(BaseModel):
     profile_id: str
+    passphrase: str | None = None
+
+
+class DisconnectRequest(BaseModel):
+    session_uuid: str | None = None  # If None, disconnects the first active session
 
 
 class TerminalSendRequest(BaseModel):

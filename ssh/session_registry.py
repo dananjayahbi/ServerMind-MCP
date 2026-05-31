@@ -1,4 +1,4 @@
-"""Thread-safe session registry enforcing the single-EXPOSED-session constraint."""
+"""Thread-safe session registry supporting multiple concurrent exposed sessions."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from shared.constants import SessionState
-from shared.exceptions import SessionAlreadyExposedError
 from shared.models import SessionStateModel
 
 
@@ -45,7 +44,7 @@ class SessionEntry:
 class SessionRegistry:
     """
     Thread-safe registry for SSH sessions.
-    Enforces the single-EXPOSED-session constraint.
+    Supports multiple concurrent exposed sessions.
     """
 
     def __init__(self) -> None:
@@ -59,16 +58,8 @@ class SessionRegistry:
     # ------------------------------------------------------------------
 
     def register(self, session_uuid: str, profile_id: str) -> SessionEntry:
-        """Register a new session. Raises if another EXPOSED session exists."""
+        """Register a new session. Allows multiple concurrent sessions."""
         with self._lock:
-            # Check for existing exposed session
-            for entry in self._sessions.values():
-                if entry.state not in (SessionState.DISCONNECTED, SessionState.FAULT):
-                    raise SessionAlreadyExposedError(
-                        f"Session {entry.session_uuid} is already active "
-                        f"(state: {entry.state}). Disconnect it first."
-                    )
-
             entry = SessionEntry(
                 session_uuid=session_uuid,
                 profile_id=profile_id,
@@ -90,20 +81,33 @@ class SessionRegistry:
             return None
 
     def get_active(self) -> SessionEntry | None:
-        """Return the single active (non-DISCONNECTED) session, if any."""
+        """Return the first active (non-DISCONNECTED) session, if any."""
         with self._lock:
             for entry in self._sessions.values():
                 if entry.state not in (SessionState.DISCONNECTED,):
                     return entry
             return None
 
+    def list_active(self) -> list[SessionEntry]:
+        """Return all active (non-DISCONNECTED) sessions."""
+        with self._lock:
+            return [
+                e for e in self._sessions.values()
+                if e.state not in (SessionState.DISCONNECTED,)
+            ]
+
     def get_exposed(self) -> SessionEntry | None:
-        """Return the CONNECTED session, if any."""
+        """Return the first CONNECTED session, if any."""
         with self._lock:
             for entry in self._sessions.values():
                 if entry.state == SessionState.CONNECTED:
                     return entry
             return None
+
+    def list_exposed(self) -> list[SessionEntry]:
+        """Return all CONNECTED sessions."""
+        with self._lock:
+            return [e for e in self._sessions.values() if e.state == SessionState.CONNECTED]
 
     def update_state(self, session_uuid: str, new_state: str) -> None:
         with self._lock:
@@ -121,10 +125,19 @@ class SessionRegistry:
                 self._profile_map.pop(entry.profile_id, None)
 
     def get_state_model(self) -> SessionStateModel:
-        """Return a snapshot of the current session state (DISCONNECTED if none)."""
+        """Return a snapshot of the first active session state (DISCONNECTED if none)."""
         with self._lock:
             for entry in self._sessions.values():
                 if entry.state != SessionState.DISCONNECTED:
                     return entry.to_state_model()
             # Return a disconnected model
             return SessionStateModel()
+
+    def list_state_models(self) -> list[SessionStateModel]:
+        """Return state snapshots for all active sessions."""
+        with self._lock:
+            active = [
+                e.to_state_model() for e in self._sessions.values()
+                if e.state != SessionState.DISCONNECTED
+            ]
+            return active if active else [SessionStateModel()]

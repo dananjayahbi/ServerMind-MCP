@@ -18,6 +18,9 @@ export interface SessionStatus {
   last_command_at: string | null;
 }
 
+/** A single exposed server session (used in multi-session dashboard). */
+export type ExposedSession = SessionStatus;
+
 export interface ServerProfile {
   id: string;
   display_name: string;

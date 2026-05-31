@@ -136,6 +136,8 @@ class CommandRequest:
     timeout_sec: int
     command_id: str = field(default_factory=_new_uuid)
     submitted_at: str = field(default_factory=_utcnow_iso)
+    # Optional: route to a specific session (multi-server support)
+    target_session_uuid: str | None = None
 
 
 @dataclass

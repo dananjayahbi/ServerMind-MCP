@@ -48,18 +48,27 @@ TOOL_CATALOGUE: list[Tool] = [
     ),
     Tool(
         name="server_get_session_status",
-        description="Returns the current session state including connection status and statistics.",
+        description=(
+            "Returns the current session state(s). If session_uuid is provided, returns status "
+            "of that specific session. Otherwise returns all active sessions (or DISCONNECTED if none)."
+        ),
         inputSchema={
             "type": "object",
-            "properties": {},
+            "properties": {
+                "session_uuid": {
+                    "type": "string",
+                    "description": "Optional UUID of a specific session to query.",
+                },
+            },
         },
     ),
     Tool(
         name="server_expose",
         description=(
             "Initiates an SSH connection to the specified server profile. "
-            "Only one server may be exposed at a time. "
-            "After calling this, use server_get_session_status to confirm CONNECTED state."
+            "Multiple servers can be exposed simultaneously. "
+            "After calling this, use server_get_session_status to confirm CONNECTED state. "
+            "The returned session_uuid must be passed to execute commands on this specific server."
         ),
         inputSchema={
             "type": "object",
@@ -75,8 +84,9 @@ TOOL_CATALOGUE: list[Tool] = [
     Tool(
         name="server_execute_command",
         description=(
-            "Executes a shell command on the currently exposed server and returns full output. "
-            "Uses exec mode; each command runs in a fresh environment."
+            "Executes a shell command on the specified (or first CONNECTED) server and returns full output. "
+            "Uses exec mode; each command runs in a fresh environment. "
+            "Provide session_uuid to target a specific server when multiple are exposed."
         ),
         inputSchema={
             "type": "object",
@@ -91,16 +101,20 @@ TOOL_CATALOGUE: list[Tool] = [
                     "description": "Max seconds to wait (default 300).",
                     "default": 300,
                 },
+                "session_uuid": {
+                    "type": "string",
+                    "description": "Optional session UUID to target a specific exposed server.",
+                },
             },
         },
     ),
     Tool(
         name="server_execute_script",
         description=(
-            "Executes a multi-line bash script on the currently exposed server in a single SSH call. "
+            "Executes a multi-line bash script on the specified (or first CONNECTED) server in a single SSH call. "
             "All commands run sequentially in the same bash environment and the full combined output "
-            "is returned at once. Prefer this over multiple server_execute_command calls to reduce "
-            "round-trips and token usage."
+            "is returned at once. Prefer this over multiple server_execute_command calls. "
+            "Provide session_uuid to target a specific server when multiple are exposed."
         ),
         inputSchema={
             "type": "object",
@@ -115,15 +129,18 @@ TOOL_CATALOGUE: list[Tool] = [
                     "description": "Max seconds to wait for the whole script (default 300).",
                     "default": 300,
                 },
+                "session_uuid": {
+                    "type": "string",
+                    "description": "Optional session UUID to target a specific exposed server.",
+                },
             },
         },
     ),
     Tool(
         name="server_upload_file",
         description=(
-            "Uploads a local file (on the machine running the MCP server) to the remote SSH server "
-            "via SFTP. Provide the absolute local path and the desired absolute remote path. "
-            "Use server_execute_command to extract archives or set permissions after upload."
+            "Uploads a local file (on the machine running the MCP server) to the specified remote SSH server "
+            "via SFTP. Provide session_uuid to target a specific server when multiple are exposed."
         ),
         inputSchema={
             "type": "object",
@@ -137,25 +154,36 @@ TOOL_CATALOGUE: list[Tool] = [
                     "type": "string",
                     "description": "Absolute destination path on the remote server.",
                 },
+                "session_uuid": {
+                    "type": "string",
+                    "description": "Optional session UUID to target a specific exposed server.",
+                },
             },
         },
     ),
     Tool(
         name="server_connect_terminal",
         description=(
-            "Opens a persistent shell session. Subsequent calls to server_send_terminal_input "
-            "preserve shell state (working directory, environment variables)."
+            "Opens a persistent shell session on the specified (or first CONNECTED) server. "
+            "Subsequent calls to server_send_terminal_input preserve shell state. "
+            "Provide session_uuid to target a specific server when multiple are exposed."
         ),
         inputSchema={
             "type": "object",
-            "properties": {},
+            "properties": {
+                "session_uuid": {
+                    "type": "string",
+                    "description": "Optional session UUID to target a specific exposed server.",
+                },
+            },
         },
     ),
     Tool(
         name="server_send_terminal_input",
         description=(
             "Sends input to the persistent shell session and waits for output to settle. "
-            "Preserves shell state between calls."
+            "Preserves shell state between calls. "
+            "Provide session_uuid to target a specific server when multiple are exposed."
         ),
         inputSchema={
             "type": "object",
@@ -170,15 +198,28 @@ TOOL_CATALOGUE: list[Tool] = [
                     "description": "Ms to wait for output to settle (default 1000).",
                     "default": 1000,
                 },
+                "session_uuid": {
+                    "type": "string",
+                    "description": "Optional session UUID to target a specific exposed server.",
+                },
             },
         },
     ),
     Tool(
         name="server_disconnect",
-        description="Cleanly terminates the active SSH session.",
+        description=(
+            "Cleanly terminates an SSH session. "
+            "Provide session_uuid to disconnect a specific server. "
+            "If omitted, disconnects the first active session (backward compat)."
+        ),
         inputSchema={
             "type": "object",
-            "properties": {},
+            "properties": {
+                "session_uuid": {
+                    "type": "string",
+                    "description": "UUID of the session to disconnect. Omit to disconnect the first active session.",
+                },
+            },
         },
     ),
     Tool(

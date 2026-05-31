@@ -11,7 +11,6 @@ import audit.logger as audit_log
 from shared.constants import Actor, EventCategory, LogLevel, SessionState
 from shared.exceptions import (
     NoActiveSessionError,
-    SessionAlreadyExposedError,
 )
 from shared.models import CommandRequest, CommandResult, ServerProfile, SessionStateModel
 from ssh.connection import establish_connection
@@ -69,6 +68,10 @@ class SessionManager:
     # Expose / Connect
     # ------------------------------------------------------------------
 
+    def list_sessions(self) -> list[SessionStateModel]:
+        """Return state snapshots for all active sessions."""
+        return self._registry.list_state_models()
+
     def expose(
         self,
         profile: ServerProfile,
@@ -77,11 +80,11 @@ class SessionManager:
         """
         Initiate an SSH connection for the given profile.
         Returns the session_uuid. Connection happens asynchronously.
+        Multiple concurrent sessions are supported.
         """
         session_uuid = str(uuid.uuid4())
 
         with self._lock:
-            # Will raise SessionAlreadyExposedError if another is active
             entry = self._registry.register(session_uuid, profile.id)
             self._session_profiles[session_uuid] = profile
 
@@ -305,9 +308,16 @@ class SessionManager:
     # Command Execution
     # ------------------------------------------------------------------
 
-    def execute_command(self, request: CommandRequest) -> CommandResult:
-        """Execute a command via exec mode on the active session."""
-        active = self._registry.get_exposed()
+    def _resolve_session(self, session_uuid: str | None) -> "SessionEntry | None":
+        """Return the session entry for the given uuid, or the first CONNECTED session."""
+        from ssh.session_registry import SessionEntry  # local to avoid circular
+        if session_uuid:
+            return self._registry.get(session_uuid)
+        return self._registry.get_exposed()
+
+    def execute_command(self, request: CommandRequest, session_uuid: str | None = None) -> CommandResult:
+        """Execute a command via exec mode. Targets session_uuid or first CONNECTED session."""
+        active = self._resolve_session(session_uuid)
         if not active:
             return CommandResult(
                 command_id=request.command_id,
@@ -336,9 +346,9 @@ class SessionManager:
 
         return result
 
-    def execute_script(self, request: CommandRequest) -> CommandResult:
-        """Execute a multi-line bash script on the active session via bash -s."""
-        active = self._registry.get_exposed()
+    def execute_script(self, request: CommandRequest, session_uuid: str | None = None) -> CommandResult:
+        """Execute a multi-line bash script. Targets session_uuid or first CONNECTED session."""
+        active = self._resolve_session(session_uuid)
         if not active:
             return CommandResult(
                 command_id=request.command_id,
@@ -371,6 +381,7 @@ class SessionManager:
         local_path: str,
         remote_path: str,
         progress_callback: "Callable[[int, int], None] | None" = None,
+        session_uuid: str | None = None,
     ) -> dict:
         """Upload a local file to the remote server via SFTP.
 
@@ -382,7 +393,7 @@ class SessionManager:
         import os
         from ssh.sftp_transfer import sftp_put_pipelined
 
-        active = self._registry.get_exposed()
+        active = self._resolve_session(session_uuid)
         if not active:
             return {"success": False, "error": "No active SSH session. Use server_expose first."}
 
@@ -429,9 +440,9 @@ class SessionManager:
     # Shell Channel
     # ------------------------------------------------------------------
 
-    def open_shell(self) -> str | None:
-        """Open a persistent shell on the active session. Returns session_uuid or None."""
-        active = self._registry.get_exposed()
+    def open_shell(self, session_uuid: str | None = None) -> str | None:
+        """Open a persistent shell on the specified (or first CONNECTED) session. Returns session_uuid or None."""
+        active = self._resolve_session(session_uuid)
         if not active:
             return None
 
@@ -454,10 +465,10 @@ class SessionManager:
         return active.session_uuid
 
     def send_terminal_input(
-        self, request: CommandRequest
+        self, request: CommandRequest, session_uuid: str | None = None
     ) -> CommandResult:
-        """Send input to the shell channel."""
-        active = self._registry.get_exposed()
+        """Send input to the shell channel of the specified (or first CONNECTED) session."""
+        active = self._resolve_session(session_uuid)
         if not active:
             return CommandResult(
                 command_id=request.command_id,
@@ -495,9 +506,9 @@ class SessionManager:
     # Web Shell Channel (for xterm.js WebSocket terminal)
     # ------------------------------------------------------------------
 
-    def get_or_open_web_shell(self) -> ShellChannel | None:
+    def get_or_open_web_shell(self, session_uuid: str | None = None) -> ShellChannel | None:
         """Get or open a dedicated PTY shell channel for the web UI terminal."""
-        active = self._registry.get_exposed()
+        active = self._resolve_session(session_uuid)
         if not active:
             return None
 
@@ -536,6 +547,10 @@ class SessionManager:
 
     def get_state_model(self) -> SessionStateModel:
         return self._registry.get_state_model()
+
+    def get_state_model_all(self) -> list[SessionStateModel]:
+        """Return state snapshots for all active sessions."""
+        return self._registry.list_state_models()
 
     def get_active_session_uuid(self) -> str | None:
         active = self._registry.get_active()

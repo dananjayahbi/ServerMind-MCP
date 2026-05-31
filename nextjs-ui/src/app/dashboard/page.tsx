@@ -1,24 +1,23 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useAppStore } from "@/lib/store";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { ExposedSessionCard } from "@/components/dashboard/ExposedSessionCard";
 import {
-  Server, Zap, Clock, Activity, Power, PowerOff, RefreshCw
+  Server, Zap, Clock, Activity, Power, RefreshCw, Plus
 } from "lucide-react";
 import { cn, formatTimestamp, formatRelative, stateDotColor, stateColor } from "@/lib/utils";
+import type { ExposedSession } from "@/types/api";
 
 export default function DashboardPage() {
-  const { session, profiles, logs, ipcConnected } = useAppStore();
+  const { exposedSessions, setExposedSessions, addOrUpdateSession, removeSession, profiles, logs, ipcConnected } = useAppStore();
   const [selectedProfile, setSelectedProfile] = useState("");
   const [exposing, setExposing] = useState(false);
-  const [disconnecting, setDisconnecting] = useState(false);
+  const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  const isConnected = session?.state === "CONNECTED";
-  const isActive = session?.state !== "DISCONNECTED" && session?.state !== undefined;
-
-  const activeProfile = profiles.find((p) => p.id === session?.profile_id);
+  const activeSessions = exposedSessions.filter((s) => s.state !== "DISCONNECTED");
 
   useEffect(() => {
     if (!selectedProfile && profiles.length > 0) {
@@ -26,14 +25,32 @@ export default function DashboardPage() {
     }
   }, [profiles]);
 
+  const refreshSessions = useCallback(async () => {
+    try {
+      const res = await fetch("/api/sessions");
+      if (res.ok) {
+        const data: ExposedSession[] = await res.json();
+        const active = data.filter((s) => s.state !== "DISCONNECTED");
+        setExposedSessions(active);
+      }
+    } catch {
+      // silently ignore
+    }
+  }, [setExposedSessions]);
+
+  useEffect(() => {
+    refreshSessions();
+    const interval = setInterval(refreshSessions, 5000);
+    return () => clearInterval(interval);
+  }, [refreshSessions]);
+
   async function refresh() {
     setRefreshing(true);
     try {
-      const [sessRes, profRes] = await Promise.all([
-        fetch("/api/session/status"),
+      const [profRes] = await Promise.all([
         fetch("/api/profiles"),
+        refreshSessions(),
       ]);
-      if (sessRes.ok) useAppStore.getState().setSession(await sessRes.json());
       if (profRes.ok) useAppStore.getState().setProfiles(await profRes.json());
     } finally {
       setRefreshing(false);
@@ -51,8 +68,22 @@ export default function DashboardPage() {
         body: JSON.stringify({ profile_id: selectedProfile }),
       });
       const data = await res.json();
-      if (!res.ok) setError(data.detail || "Failed to expose server");
-      else useAppStore.getState().setSession({ ...useAppStore.getState().session!, ...data });
+      if (!res.ok) {
+        setError(data.detail || "Failed to expose server");
+      } else {
+        // Add the new session optimistically, then refresh for real state
+        addOrUpdateSession({
+          session_uuid: data.session_uuid,
+          profile_id: selectedProfile,
+          state: "CONNECTING",
+          connected_at: null,
+          last_keepalive_at: null,
+          reconnect_attempt_count: 0,
+          commands_executed: 0,
+          last_command_at: null,
+        });
+        setTimeout(refreshSessions, 2000);
+      }
     } catch (err) {
       setError(String(err));
     } finally {
@@ -60,28 +91,32 @@ export default function DashboardPage() {
     }
   }
 
-  async function handleDisconnect() {
-    setDisconnecting(true);
+  async function handleDisconnect(session_uuid: string) {
+    setDisconnectingId(session_uuid);
     setError(null);
     try {
-      const res = await fetch("/api/session/disconnect", { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) setError(data.detail || "Failed to disconnect");
-      else useAppStore.getState().setSession({ ...useAppStore.getState().session!, state: "DISCONNECTED", session_uuid: null });
+      const res = await fetch(`/api/sessions/${session_uuid}/disconnect`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.detail || "Failed to disconnect");
+      } else {
+        removeSession(session_uuid);
+      }
     } catch (err) {
       setError(String(err));
     } finally {
-      setDisconnecting(false);
+      setDisconnectingId(null);
     }
   }
 
   const recentLogs = logs.slice(0, 5);
+  const totalCommands = activeSessions.reduce((acc, s) => acc + (s.commands_executed ?? 0), 0);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <PageHeader
         title="Dashboard"
-        description="Session overview and quick controls"
+        description="Manage multiple exposed servers"
         actions={
           <button
             onClick={refresh}
@@ -94,39 +129,24 @@ export default function DashboardPage() {
       />
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
-        {/* Connection status card */}
-        <div className="bg-[#141414] border border-[#2A2A2A] rounded-xl p-5">
-          <p className="text-[11px] font-semibold text-[#666666] uppercase tracking-wider mb-4">
-            Session Status
-          </p>
-          <div className="flex items-center gap-5 flex-wrap">
-            <div className="flex items-center gap-3 bg-[#0D0D0D] border border-[#2A2A2A] rounded-lg px-4 py-3 min-w-[180px]">
-              <div className={cn("w-3 h-3 rounded-full flex-shrink-0", stateDotColor(session?.state ?? "DISCONNECTED"))} />
-              <span className={cn("text-[15px] font-bold", stateColor(session?.state ?? "DISCONNECTED"))}>
-                {session?.state ?? "DISCONNECTED"}
-              </span>
-            </div>
-            <div className="flex flex-col gap-1 text-[12px] text-[#666666]">
-              {activeProfile && (
-                <span><strong className="text-[#F2F2F2]">{activeProfile.display_name}</strong> — {activeProfile.hostname}:{activeProfile.port}</span>
-              )}
-              {session?.connected_at && (
-                <span>Connected {formatRelative(session.connected_at)}</span>
-              )}
-              {session?.session_uuid && (
-                <span className="font-mono text-[10px]">UUID: {session.session_uuid}</span>
-              )}
-            </div>
-          </div>
-        </div>
-
         {/* Stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {[
-            { icon: Zap, label: "Commands Run", value: session?.commands_executed ?? 0 },
+            { icon: Server, label: "Active Sessions", value: activeSessions.length },
+            { icon: Zap, label: "Total Commands", value: totalCommands },
             { icon: Server, label: "Profiles Saved", value: profiles.length },
-            { icon: Clock, label: "Last Command", value: session?.last_command_at ? formatRelative(session.last_command_at) : "—" },
-            { icon: Activity, label: "Keep-alive", value: session?.last_keepalive_at ? formatRelative(session.last_keepalive_at) : "—" },
+            {
+              icon: Clock,
+              label: "Last Command",
+              value: (() => {
+                const last = activeSessions
+                  .map((s) => s.last_command_at)
+                  .filter(Boolean)
+                  .sort()
+                  .pop();
+                return last ? formatRelative(last) : "—";
+              })(),
+            },
           ].map(({ icon: Icon, label, value }) => (
             <div key={label} className="bg-[#141414] border border-[#2A2A2A] rounded-xl p-4 flex flex-col gap-2">
               <Icon size={16} className="text-[#49C5B6]" />
@@ -136,50 +156,63 @@ export default function DashboardPage() {
           ))}
         </div>
 
-        {/* Expose / Disconnect controls */}
+        {/* Expose new server — always visible */}
         <div className="bg-[#141414] border border-[#2A2A2A] rounded-xl p-5">
           <p className="text-[11px] font-semibold text-[#666666] uppercase tracking-wider mb-4">
-            Exposure Control
+            Expose a Server
           </p>
           {error && (
             <div className="mb-3 px-3 py-2 bg-[#EF4444]/10 border border-[#EF4444]/30 rounded-lg text-[13px] text-[#EF4444]">
               {error}
             </div>
           )}
-          {!isActive ? (
-            <div className="flex items-center gap-3 flex-wrap">
-              <select
-                value={selectedProfile}
-                onChange={(e) => setSelectedProfile(e.target.value)}
-                className="bg-[#1E1E1E] border border-[#2A2A2A] text-[#F2F2F2] rounded-lg px-3 py-2 text-[13px] outline-none focus:border-[#49C5B6] transition-all"
-              >
-                {profiles.length === 0 && <option value="">No profiles — add one first</option>}
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>{p.display_name} ({p.hostname})</option>
-                ))}
-              </select>
-              <button
-                onClick={handleExpose}
-                disabled={!selectedProfile || exposing || !ipcConnected}
-                className="flex items-center gap-2 px-4 py-2 bg-[#49C5B6] hover:bg-[#13E8D5] text-[#0D0D0D] rounded-lg text-[13px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <Power size={14} />
-                {exposing ? "Connecting..." : "Expose Server"}
-              </button>
-            </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            <select
+              value={selectedProfile}
+              onChange={(e) => setSelectedProfile(e.target.value)}
+              className="bg-[#1E1E1E] border border-[#2A2A2A] text-[#F2F2F2] rounded-lg px-3 py-2 text-[13px] outline-none focus:border-[#49C5B6] transition-all"
+            >
+              {profiles.length === 0 && <option value="">No profiles — add one first</option>}
+              {profiles.map((p) => (
+                <option key={p.id} value={p.id}>{p.display_name} ({p.hostname})</option>
+              ))}
+            </select>
+            <button
+              onClick={handleExpose}
+              disabled={!selectedProfile || exposing || !ipcConnected}
+              className="flex items-center gap-2 px-4 py-2 bg-[#49C5B6] hover:bg-[#13E8D5] text-[#0D0D0D] rounded-lg text-[13px] font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <Plus size={14} />
+              {exposing ? "Connecting..." : "Expose Server"}
+            </button>
+          </div>
+          {activeSessions.length > 0 && (
+            <p className="mt-2 text-[11px] text-[#555]">
+              {activeSessions.length} server{activeSessions.length > 1 ? "s" : ""} currently exposed — you can expose more simultaneously.
+            </p>
+          )}
+        </div>
+
+        {/* Active sessions list */}
+        <div className="bg-[#141414] border border-[#2A2A2A] rounded-xl p-5">
+          <p className="text-[11px] font-semibold text-[#666666] uppercase tracking-wider mb-4">
+            Active Sessions ({activeSessions.length})
+          </p>
+          {activeSessions.length === 0 ? (
+            <p className="text-[13px] text-[#555] text-center py-6">
+              No servers exposed. Use the control above to expose one.
+            </p>
           ) : (
-            <div className="flex items-center gap-4 flex-wrap">
-              <span className="text-[13px] text-[#666666]">
-                {activeProfile ? `Exposed: ${activeProfile.display_name}` : "Session active"}
-              </span>
-              <button
-                onClick={handleDisconnect}
-                disabled={disconnecting}
-                className="flex items-center gap-2 px-4 py-2 bg-[#EF4444]/10 hover:bg-[#EF4444]/20 text-[#EF4444] border border-[#EF4444]/30 rounded-lg text-[13px] font-semibold transition-all disabled:opacity-40"
-              >
-                <PowerOff size={14} />
-                {disconnecting ? "Disconnecting..." : "Disconnect"}
-              </button>
+            <div className="space-y-3">
+              {activeSessions.map((session) => (
+                <ExposedSessionCard
+                  key={session.session_uuid}
+                  session={session}
+                  profile={profiles.find((p) => p.id === session.profile_id)}
+                  disconnecting={disconnectingId === session.session_uuid}
+                  onDisconnect={handleDisconnect}
+                />
+              ))}
             </div>
           )}
         </div>

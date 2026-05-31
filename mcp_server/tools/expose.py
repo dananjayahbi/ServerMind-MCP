@@ -3,12 +3,12 @@
 import json
 
 from config.engine import get_engine
-from shared.exceptions import ProfileNotFoundError, SessionAlreadyExposedError
+from shared.exceptions import ProfileNotFoundError
 from ssh.session_manager import get_manager
 
 
 def handle(arguments: dict) -> str:
-    """Initiates an SSH connection to the specified profile."""
+    """Initiates an SSH connection to the specified profile. Multiple servers can be exposed simultaneously."""
     profile_id = arguments["profile_id"]
 
     engine = get_engine()
@@ -23,11 +23,6 @@ def handle(arguments: dict) -> str:
     manager = get_manager()
     try:
         session_uuid = manager.expose(profile)
-    except SessionAlreadyExposedError as exc:
-        return json.dumps({
-            "error": "SESSION_ALREADY_ACTIVE",
-            "message": str(exc),
-        })
     except Exception as exc:
         return json.dumps({
             "error": "EXPOSE_FAILED",
@@ -40,6 +35,7 @@ def handle(arguments: dict) -> str:
         "profile_id": profile_id,
         "message": (
             f"Connecting to {profile.hostname}:{profile.port}. "
-            "Call server_get_session_status to confirm CONNECTED state before issuing commands."
+            "Multiple servers can be exposed simultaneously. "
+            "Call server_get_session_status to confirm CONNECTED state, then use session_uuid in commands."
         ),
     }, indent=2)

@@ -11,21 +11,30 @@ from ssh.session_manager import get_manager
 
 
 def handle(arguments: dict) -> str:
-    """Sends input to the active shell session and captures output."""
+    """Sends input to the specified (or first CONNECTED) shell session and captures output."""
     input_text = arguments["input"]
     wait_ms = arguments.get("wait_ms", 1000)
+    session_uuid = arguments.get("session_uuid")
 
     if not input_text.endswith("\n"):
         input_text += "\n"
 
     manager = get_manager()
-    state = manager.get_state_model()
 
-    if state.state != "CONNECTED":
-        return json.dumps({
-            "error": "SESSION_NOT_CONNECTED",
-            "message": f"No CONNECTED session (state: {state.state}).",
-        })
+    if session_uuid:
+        entry = manager._registry.get(session_uuid)
+        if not entry or entry.state != "CONNECTED":
+            return json.dumps({
+                "error": "SESSION_NOT_CONNECTED",
+                "message": f"Session {session_uuid} is not CONNECTED (state: {entry.state if entry else 'NOT_FOUND'}).",
+            })
+    else:
+        state = manager.get_state_model()
+        if state.state != "CONNECTED":
+            return json.dumps({
+                "error": "SESSION_NOT_CONNECTED",
+                "message": f"No CONNECTED session available (state: {state.state}).",
+            })
 
     request = CommandRequest(
         command_id=str(uuid.uuid4()),
@@ -34,6 +43,7 @@ def handle(arguments: dict) -> str:
         execution_mode=ExecMode.SHELL,
         timeout_sec=max(10, wait_ms // 1000 + 5),
         submitted_at=datetime.now(timezone.utc).isoformat(),
+        target_session_uuid=session_uuid,
     )
 
     result = get_queue_manager().submit(request, timeout=float(request.timeout_sec) + 5)

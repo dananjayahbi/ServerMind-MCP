@@ -1,6 +1,6 @@
 // Zustand store for client-side state
 import { create } from "zustand";
-import type { SessionStatus, LogEntry, ServerProfile, AppSettings } from "@/types/api";
+import type { SessionStatus, LogEntry, ServerProfile, AppSettings, ExposedSession } from "@/types/api";
 
 export interface WorkflowConnection {
   session_uuid: string;
@@ -15,9 +15,15 @@ export interface WorkflowConnection {
 }
 
 interface AppStore {
-  // Session
+  // Session (backward compat: first active session)
   session: SessionStatus | null;
   setSession: (s: SessionStatus | null) => void;
+
+  // Multi-session: all exposed sessions
+  exposedSessions: ExposedSession[];
+  setExposedSessions: (sessions: ExposedSession[]) => void;
+  addOrUpdateSession: (s: ExposedSession) => void;
+  removeSession: (session_uuid: string) => void;
 
   // Profiles
   profiles: ServerProfile[];
@@ -57,6 +63,27 @@ interface AppStore {
 export const useAppStore = create<AppStore>((set) => ({
   session: null,
   setSession: (s) => set({ session: s }),
+
+  exposedSessions: [],
+  setExposedSessions: (sessions) => set({ exposedSessions: sessions }),
+  addOrUpdateSession: (s) =>
+    set((state) => {
+      const idx = state.exposedSessions.findIndex(
+        (e) => e.session_uuid === s.session_uuid
+      );
+      if (idx >= 0) {
+        const updated = [...state.exposedSessions];
+        updated[idx] = s;
+        return { exposedSessions: updated };
+      }
+      return { exposedSessions: [...state.exposedSessions, s] };
+    }),
+  removeSession: (session_uuid) =>
+    set((state) => ({
+      exposedSessions: state.exposedSessions.filter(
+        (e) => e.session_uuid !== session_uuid
+      ),
+    })),
 
   profiles: [],
   setProfiles: (p) => set({ profiles: p }),

@@ -1,18 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ipcFetch } from "@/lib/ipc-client";
 
-export async function POST(req: NextRequest) {
+/** POST /api/sessions/[uuid]/disconnect — disconnect a specific session */
+export async function POST(
+  _req: NextRequest,
+  { params }: { params: Promise<{ uuid: string }> }
+) {
   try {
-    // Accept optional { session_uuid } body for targeted disconnect
-    let body: Record<string, string> = {};
-    try {
-      body = await req.json();
-    } catch {
-      // no body — will be handled by IPC (disconnects first active)
-    }
+    const { uuid } = await params;
     const res = await ipcFetch("/session/disconnect", {
       method: "POST",
-      body: JSON.stringify(body),
+      body: JSON.stringify({ session_uuid: uuid }),
     });
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });

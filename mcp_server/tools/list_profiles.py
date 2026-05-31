@@ -7,9 +7,15 @@ from ssh.session_manager import get_manager
 
 
 def handle(arguments: dict) -> str:
-    """Returns a JSON list of all configured server profiles."""
+    """Returns a JSON list of all configured server profiles with their session states."""
     profiles = get_engine().list_profiles()
-    session_model = get_manager().get_state_model()
+    manager = get_manager()
+    # Build a map of profile_id -> session state for all active sessions
+    active_models = manager.get_state_model_all()
+    profile_states: dict[str, str] = {}
+    for model in active_models:
+        if model.profile_id and model.state != "DISCONNECTED":
+            profile_states[model.profile_id] = model.state
 
     result = []
     for profile in profiles:
@@ -20,14 +26,8 @@ def handle(arguments: dict) -> str:
             "port": profile.port,
             "username": profile.username,
             "notes": profile.notes,
-            "session_state": None,
+            "session_state": profile_states.get(profile.id),
         }
-        # Attach session state if this profile is the active one
-        if (
-            session_model.profile_id == profile.id
-            and session_model.state != "DISCONNECTED"
-        ):
-            entry["session_state"] = session_model.state
         result.append(entry)
 
     return json.dumps(result, indent=2)
